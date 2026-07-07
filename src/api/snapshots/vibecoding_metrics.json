@@ -1,0 +1,272 @@
+[
+  {
+    "timestamp": "2026-06-09T18:53:17Z",
+    "repository_path": "C:/Users/ajeem/Downloads/downloads/testing/testing1",
+    "target": "ROUTE:post:/login",
+    "policy": "NEW_FEATURE",
+    "repository_character_count": 161025,
+    "repository_token_estimate": 40256,
+    "repository_file_count": 39,
+    "context_character_count": 3338,
+    "context_token_estimate": 834,
+    "selected_files": [
+      "src/controllers/auth.controller.js",
+      "src/routes/auth.routes.js",
+      "src/models/user.model.js",
+      "src/services/auth.service.js"
+    ],
+    "selected_file_count": 4,
+    "saved_tokens_vs_repo": 39422,
+    "reduction_percent_vs_repo": 97.93,
+    "files_opened_by_agent": [
+      "src/routes/auth.routes.js",
+      "src/services/auth.service.js",
+      "src/controllers/auth.controller.js"
+    ],
+    "files_modified_by_agent": null,
+    "investigation_character_count": 6037,
+    "investigation_token_estimate": 1509,
+    "agent_metadata": {
+      "agent_name": "Antigravity",
+      "session_id": "default_session"
+    },
+    "query_id": 1
+  },
+  {
+    "timestamp": "2026-06-09T18:53:17Z",
+    "repository_path": "C:/Users/ajeem/Downloads/downloads/testing/testing1",
+    "target": "ROUTE:post:/register",
+    "policy": "NEW_FEATURE",
+    "repository_character_count": 161025,
+    "repository_token_estimate": 40256,
+    "repository_file_count": 39,
+    "context_character_count": 3498,
+    "context_token_estimate": 874,
+    "selected_files": [
+      "src/controllers/auth.controller.js",
+      "src/routes/auth.routes.js",
+      "src/models/user.model.js",
+      "src/services/auth.service.js"
+    ],
+    "selected_file_count": 4,
+    "saved_tokens_vs_repo": 39382,
+    "reduction_percent_vs_repo": 97.83,
+    "files_opened_by_agent": null,
+    "files_modified_by_agent": null,
+    "investigation_character_count": null,
+    "investigation_token_estimate": null,
+    "agent_metadata": {
+      "agent_name": "Antigravity",
+      "session_id": "default_session"
+    },
+    "query_id": 2
+  },
+  {
+    "timestamp": "2026-06-09T18:53:35Z",
+    "repository_path": "C:/Users/ajeem/Downloads/downloads/testing/testing1",
+    "target": "ROUTE:post:/login",
+    "policy": "NEW_FEATURE",
+    "repository_character_count": 161025,
+    "repository_token_estimate": 40256,
+    "repository_file_count": 39,
+    "context_character_count": 3338,
+    "context_token_estimate": 834,
+    "selected_files": [
+      "src/controllers/auth.controller.js",
+      "src/models/user.model.js",
+      "src/services/auth.service.js",
+      "src/routes/auth.routes.js"
+    ],
+    "selected_file_count": 4,
+    "saved_tokens_vs_repo": 39422,
+    "reduction_percent_vs_repo": 97.93,
+    "files_opened_by_agent": null,
+    "files_modified_by_agent": null,
+    "investigation_character_count": null,
+    "investigation_token_estimate": null,
+    "agent_metadata": {
+      "agent_name": "Antigravity",
+      "session_id": "default_session"
+    },
+    "query_id": 3
+  },
+  {
+    "timestamp": "2026-06-09T18:53:35Z",
+    "repository_path": "C:/Users/ajeem/Downloads/downloads/testing/testing1",
+    "target": "ROUTE:post:/register",
+    "policy": "NEW_FEATURE",
+    "repository_character_count": 161025,
+    "repository_token_estimate": 40256,
+    "repository_file_count": 39,
+    "context_character_count": 3498,
+    "context_token_estimate": 874,
+    "selected_files": [
+      "src/controllers/auth.controller.js",
+      "src/models/user.model.js",
+      "src/services/auth.service.js",
+      "src/routes/auth.routes.js"
+    ],
+    "selected_file_count": 4,
+    "saved_tokens_vs_repo": 39382,
+    "reduction_percent_vs_repo": 97.83,
+    "files_opened_by_agent": null,
+    "files_modified_by_agent": null,
+    "investigation_character_count": null,
+    "investigation_token_estimate": null,
+    "agent_metadata": {
+      "agent_name": "Antigravity",
+      "session_id": "default_session"
+    },
+    "query_id": 4
+  },
+  {
+    "timestamp": "2026-06-17T12:00:36Z",
+    "repository_path": "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test_microservice",
+    "target": "FUNCTION:api.js:getUserById",
+    "policy": "DEFAULT",
+    "repository_character_count": 1769,
+    "repository_token_estimate": 442,
+    "repository_file_count": 5,
+    "context_character_count": 233,
+    "context_token_estimate": 58,
+    "selected_files": [
+      "api.js"
+    ],
+    "selected_file_count": 1,
+    "saved_tokens_vs_repo": 384,
+    "reduction_percent_vs_repo": 86.83,
+    "files_opened_by_agent": null,
+    "files_modified_by_agent": null,
+    "investigation_character_count": null,
+    "investigation_token_estimate": null,
+    "agent_metadata": {
+      "agent_name": "Antigravity",
+      "session_id": "default_session"
+    }
+  },
+  {
+    "timestamp": "2026-06-17T12:00:36Z",
+    "repository_path": "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test_microservice",
+    "target": "FUNCTION:getUserById",
+    "policy": "DEFAULT",
+    "repository_character_count": 1769,
+    "repository_token_estimate": 442,
+    "repository_file_count": 5,
+    "context_character_count": 233,
+    "context_token_estimate": 58,
+    "selected_files": [
+      "api.js"
+    ],
+    "selected_file_count": 1,
+    "saved_tokens_vs_repo": 384,
+    "reduction_percent_vs_repo": 86.83,
+    "files_opened_by_agent": null,
+    "files_modified_by_agent": null,
+    "investigation_character_count": null,
+    "investigation_token_estimate": null,
+    "agent_metadata": {
+      "agent_name": "Antigravity",
+      "session_id": "default_session"
+    }
+  },
+  {
+    "timestamp": "2026-06-17T12:00:59Z",
+    "repository_path": "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test_microservice",
+    "target": "FUNCTION:api.js:getUserById",
+    "policy": "DEFAULT",
+    "repository_character_count": 1769,
+    "repository_token_estimate": 442,
+    "repository_file_count": 5,
+    "context_character_count": 233,
+    "context_token_estimate": 58,
+    "selected_files": [
+      "api.js"
+    ],
+    "selected_file_count": 1,
+    "saved_tokens_vs_repo": 384,
+    "reduction_percent_vs_repo": 86.83,
+    "files_opened_by_agent": null,
+    "files_modified_by_agent": null,
+    "investigation_character_count": null,
+    "investigation_token_estimate": null,
+    "agent_metadata": {
+      "agent_name": "Antigravity",
+      "session_id": "default_session"
+    }
+  },
+  {
+    "timestamp": "2026-06-17T12:00:59Z",
+    "repository_path": "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test_microservice",
+    "target": "FUNCTION:getUserById",
+    "policy": "DEFAULT",
+    "repository_character_count": 1769,
+    "repository_token_estimate": 442,
+    "repository_file_count": 5,
+    "context_character_count": 233,
+    "context_token_estimate": 58,
+    "selected_files": [
+      "api.js"
+    ],
+    "selected_file_count": 1,
+    "saved_tokens_vs_repo": 384,
+    "reduction_percent_vs_repo": 86.83,
+    "files_opened_by_agent": null,
+    "files_modified_by_agent": null,
+    "investigation_character_count": null,
+    "investigation_token_estimate": null,
+    "agent_metadata": {
+      "agent_name": "Antigravity",
+      "session_id": "default_session"
+    }
+  },
+  {
+    "timestamp": "2026-06-18T17:53:48Z",
+    "repository_path": "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test_microservice",
+    "target": "FUNCTION:api.js:getUserById",
+    "policy": "DEFAULT",
+    "repository_character_count": 1769,
+    "repository_token_estimate": 442,
+    "repository_file_count": 5,
+    "context_character_count": 233,
+    "context_token_estimate": 58,
+    "selected_files": [
+      "api.js"
+    ],
+    "selected_file_count": 1,
+    "saved_tokens_vs_repo": 384,
+    "reduction_percent_vs_repo": 86.83,
+    "files_opened_by_agent": null,
+    "files_modified_by_agent": null,
+    "investigation_character_count": null,
+    "investigation_token_estimate": null,
+    "agent_metadata": {
+      "agent_name": "Antigravity",
+      "session_id": "default_session"
+    }
+  },
+  {
+    "timestamp": "2026-06-18T17:53:48Z",
+    "repository_path": "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test_microservice",
+    "target": "FUNCTION:getUserById",
+    "policy": "DEFAULT",
+    "repository_character_count": 1769,
+    "repository_token_estimate": 442,
+    "repository_file_count": 5,
+    "context_character_count": 233,
+    "context_token_estimate": 58,
+    "selected_files": [
+      "api.js"
+    ],
+    "selected_file_count": 1,
+    "saved_tokens_vs_repo": 384,
+    "reduction_percent_vs_repo": 86.83,
+    "files_opened_by_agent": null,
+    "files_modified_by_agent": null,
+    "investigation_character_count": null,
+    "investigation_token_estimate": null,
+    "agent_metadata": {
+      "agent_name": "Antigravity",
+      "session_id": "default_session"
+    }
+  }
+]

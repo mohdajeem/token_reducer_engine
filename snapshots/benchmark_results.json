@@ -1,0 +1,44 @@
+{
+  "summary": {
+    "avg_recall": 1.0,
+    "avg_precision": 1.0,
+    "avg_context_efficiency": 84.55,
+    "avg_hallucination_rate": 0.0,
+    "test_pass_rate": 1.0,
+    "total_cost_usd": 0.0,
+    "avg_latency_seconds": 0.0
+  },
+  "results": [
+    {
+      "task_id": "task_modify_get_user",
+      "name": "Modify getUserById in microservice",
+      "stages": {
+        "context_extraction": {
+          "characters": 233,
+          "estimated_tokens": 58,
+          "reduction_percentage": 84.55
+        },
+        "patch_validation": {
+          "syntax_valid": true,
+          "safe_to_apply": true,
+          "trust_score": 0.0,
+          "findings": []
+        },
+        "test_execution": {
+          "passed": true,
+          "exit_code": 0,
+          "output_log": "STDOUT:\nPASSED - getUserById return value updated successfully\n\n\nSTDERR:\n"
+        }
+      },
+      "metrics": {
+        "edit_recall": 1.0,
+        "edit_precision": 1.0,
+        "context_efficiency": 84.55,
+        "hallucination_rate": 0.0,
+        "test_pass_rate": 1.0,
+        "cost_usd": 0.0,
+        "latency_seconds": 0.0
+      }
+    }
+  ]
+}

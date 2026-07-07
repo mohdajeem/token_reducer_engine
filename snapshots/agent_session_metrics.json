@@ -1,0 +1,902 @@
+{
+  "bec51ff1-e8b6-4e57-a51a-85b324af07d8": {
+    "session_id": "bec51ff1-e8b6-4e57-a51a-85b324af07d8",
+    "start_timestamp": "2026-06-08T17:24:01Z",
+    "end_timestamp": "2026-06-11T16:12:46Z",
+    "files_opened_count": 94,
+    "files_modified_count": 45,
+    "investigation_character_count": 3199057,
+    "investigation_token_estimate": 799727,
+    "repo_tokens": 153071,
+    "external_tokens": 13416,
+    "gemini_tokens": 633240,
+    "unique_files_opened": [
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/logs/transcript.jsonl",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/logs/transcript.jsonl",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/steps/597/output.txt",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/tasks/task-651.log",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/tasks/task-712.log",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/implementation_plan.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/walkthrough.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/scratch/audit_report.json",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REAL_GEMINI_BENCHMARK_REPORT.md",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REAL_GROQ_BENCHMARK_REPORT.md",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/SEMANTIC_ENGINE_VS_BASELINE_REPORT.md",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/model_client.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/patch_applier.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_gemini_harness.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_groq_harness.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/safety_checker.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/sandbox_manager.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/scoring_engine.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/task_runner.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_validator.py",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/mock-mongoose.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/package.json",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/middlewares/validation.middleware.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/analytics.routes.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/document.routes.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/job.routes.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/prompt-template.routes.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/auth.service.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/document.service.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-flow.js",
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/implementation_plan.md",
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md",
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/walkthrough.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/.env",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/AGENT_SESSION_REPORT.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/BENCHMARK_REPORT.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/EDIT_RECALL_REPORT.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REAL_GROQ_BENCHMARK_REPORT.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REPOSITORY_AUDIT.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/VIBECODING_REPORT.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/generate_vibecoding_report.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/scratch/test_queries.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/agent_session_metrics.json",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/benchmark_results.json",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/edit_recall_results.json",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/vibecoding_metrics.json",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/api/mcp_server.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/api/server.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/model_client.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/patch_applier.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_comparison_harness.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_gemini_harness.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_groq_harness.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/safety_checker.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/sandbox_manager.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/scoring_engine.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/task_runner.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/build_graph.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/context_engine/context_extractor.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/impact_engine/graph_traversal.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/impact_engine/traversal_policy.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/incremental_runtime/snapshot_manager.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/language_config.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/main.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/queries/javascript.scm",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/quick_test.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/frameworks/express_route_normalizer.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/graph_builder.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/match_classifier.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/match_extractor_fixed.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/test_runner_proper.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/tests/run_all_tests.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/tests/test_mcp_server.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/edit_recall_validation.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_simulator.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_trust_analyzer.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_validator.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/semantic_validator.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test-patch.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test_microservice/api.js",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test_microservice/controllers/userController.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/package.json",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/app.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/config/db.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/middlewares/validation.middleware.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/models/user.model.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/server.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/analytics.service.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/auth.service.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/document.service.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/job.service.js"
+    ],
+    "unique_files_modified": [
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/implementation_plan.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/mcp_readiness_audit_report.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/session_analyzer_feasibility_audit.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/walkthrough.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/scratch/analyze_logs.py",
+      "C:/Users/ajeem/.gemini/antigravity-ide/scratch/audit_metrics.py",
+      "C:/Users/ajeem/.gemini/antigravity-ide/scratch/get_evidence.py",
+      "C:/Users/ajeem/.gemini/antigravity-ide/scratch/inspect_mismatch.py",
+      "C:/Users/ajeem/.gemini/antigravity-ide/scratch/inspect_steps.py",
+      "C:/Users/ajeem/.gemini/antigravity-ide/scratch/inspect_user_steps.py",
+      "C:/Users/ajeem/.gemini/antigravity-ide/scratch/test_normalization.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_gemini_harness.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_groq_harness.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/telemetry/agent_session_analyzer.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/telemetry/session_vs_mcp_analyzer.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/task.md",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test-patch.py",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/mock-mongoose.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-flow.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-mongo.js",
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/implementation_plan.md",
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/walkthrough.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/generate_session_report.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/generate_vibecoding_report.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/scratch/parse_ast.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/scratch/test_queries.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/api/mcp_server.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/model_client.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/patch_applier.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_comparison_harness.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_groq_harness.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/safety_checker.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/sandbox_manager.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/scoring_engine.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/task_runner.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/impact_engine/graph_traversal.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/queries/javascript.scm",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/match_extractor_fixed.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/tests/check_testing1_routes.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/tests/run_all_tests.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/tests/test_benchmark_harness.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/tests/test_mcp_server.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test-telemetry.py",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js"
+    ],
+    "files_metadata": {
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/logs/transcript.jsonl": {
+        "character_count": 175059,
+        "token_estimate": 43764
+      },
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/logs/transcript.jsonl": {
+        "character_count": 1765513,
+        "token_estimate": 441378
+      },
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/steps/597/output.txt": {
+        "character_count": 4454,
+        "token_estimate": 1113
+      },
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/tasks/task-651.log": {
+        "character_count": 489270,
+        "token_estimate": 122317
+      },
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/tasks/task-712.log": {
+        "character_count": 4003,
+        "token_estimate": 1000
+      },
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/implementation_plan.md": {
+        "character_count": 3612,
+        "token_estimate": 903
+      },
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md": {
+        "character_count": 835,
+        "token_estimate": 208
+      },
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/walkthrough.md": {
+        "character_count": 3708,
+        "token_estimate": 927
+      },
+      "C:/Users/ajeem/.gemini/antigravity-ide/scratch/audit_report.json": {
+        "character_count": 78369,
+        "token_estimate": 19592
+      },
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REAL_GEMINI_BENCHMARK_REPORT.md": {
+        "character_count": 11208,
+        "token_estimate": 2802
+      },
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REAL_GROQ_BENCHMARK_REPORT.md": {
+        "character_count": 11208,
+        "token_estimate": 2802
+      },
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/SEMANTIC_ENGINE_VS_BASELINE_REPORT.md": {
+        "character_count": 3567,
+        "token_estimate": 891
+      },
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/model_client.py": {
+        "character_count": 8151,
+        "token_estimate": 2037
+      },
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/patch_applier.py": {
+        "character_count": 13210,
+        "token_estimate": 3302
+      },
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_gemini_harness.py": {
+        "character_count": 10972,
+        "token_estimate": 2743
+      },
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_groq_harness.py": {
+        "character_count": 11380,
+        "token_estimate": 2845
+      },
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/safety_checker.py": {
+        "character_count": 2255,
+        "token_estimate": 563
+      },
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/sandbox_manager.py": {
+        "character_count": 4658,
+        "token_estimate": 1164
+      },
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/scoring_engine.py": {
+        "character_count": 3193,
+        "token_estimate": 798
+      },
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/task_runner.py": {
+        "character_count": 15587,
+        "token_estimate": 3896
+      },
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_validator.py": {
+        "character_count": 5543,
+        "token_estimate": 1385
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/mock-mongoose.js": {
+        "character_count": 7445,
+        "token_estimate": 1861
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/package.json": {
+        "character_count": 544,
+        "token_estimate": 136
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/middlewares/validation.middleware.js": {
+        "character_count": 557,
+        "token_estimate": 139
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/analytics.routes.js": {
+        "character_count": 356,
+        "token_estimate": 89
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js": {
+        "character_count": 1440,
+        "token_estimate": 360
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/document.routes.js": {
+        "character_count": 1519,
+        "token_estimate": 379
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/job.routes.js": {
+        "character_count": 1443,
+        "token_estimate": 360
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/prompt-template.routes.js": {
+        "character_count": 1608,
+        "token_estimate": 402
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/auth.service.js": {
+        "character_count": 3237,
+        "token_estimate": 809
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/document.service.js": {
+        "character_count": 2802,
+        "token_estimate": 700
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-flow.js": {
+        "character_count": 12211,
+        "token_estimate": 3052
+      },
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/implementation_plan.md": {
+        "character_count": 3612,
+        "token_estimate": 903
+      },
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md": {
+        "character_count": 835,
+        "token_estimate": 208
+      },
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/walkthrough.md": {
+        "character_count": 3708,
+        "token_estimate": 927
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/.env": {
+        "character_count": 124,
+        "token_estimate": 31
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/AGENT_SESSION_REPORT.md": {
+        "character_count": 16260,
+        "token_estimate": 4065
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/BENCHMARK_REPORT.md": {
+        "character_count": 1414,
+        "token_estimate": 353
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/EDIT_RECALL_REPORT.md": {
+        "character_count": 5757,
+        "token_estimate": 1439
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REAL_GROQ_BENCHMARK_REPORT.md": {
+        "character_count": 11208,
+        "token_estimate": 2802
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REPOSITORY_AUDIT.md": {
+        "character_count": 8094,
+        "token_estimate": 2023
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/VIBECODING_REPORT.md": {
+        "character_count": 1550,
+        "token_estimate": 387
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/generate_vibecoding_report.py": {
+        "character_count": 7337,
+        "token_estimate": 1834
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/scratch/test_queries.py": {
+        "character_count": 1328,
+        "token_estimate": 332
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/agent_session_metrics.json": {
+        "character_count": 64068,
+        "token_estimate": 16017
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/benchmark_results.json": {
+        "character_count": 1127,
+        "token_estimate": 281
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/edit_recall_results.json": {
+        "character_count": 13258,
+        "token_estimate": 3314
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/vibecoding_metrics.json": {
+        "character_count": 3827,
+        "token_estimate": 956
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/api/mcp_server.py": {
+        "character_count": 12375,
+        "token_estimate": 3093
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/api/server.py": {
+        "character_count": 10903,
+        "token_estimate": 2725
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/model_client.py": {
+        "character_count": 8151,
+        "token_estimate": 2037
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/patch_applier.py": {
+        "character_count": 13210,
+        "token_estimate": 3302
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_comparison_harness.py": {
+        "character_count": 21625,
+        "token_estimate": 5406
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_gemini_harness.py": {
+        "character_count": 10972,
+        "token_estimate": 2743
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_groq_harness.py": {
+        "character_count": 11380,
+        "token_estimate": 2845
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/safety_checker.py": {
+        "character_count": 2255,
+        "token_estimate": 563
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/sandbox_manager.py": {
+        "character_count": 4658,
+        "token_estimate": 1164
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/scoring_engine.py": {
+        "character_count": 3193,
+        "token_estimate": 798
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/task_runner.py": {
+        "character_count": 15587,
+        "token_estimate": 3896
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/build_graph.py": {
+        "character_count": 30711,
+        "token_estimate": 7677
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/context_engine/context_extractor.py": {
+        "character_count": 27313,
+        "token_estimate": 6828
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/impact_engine/graph_traversal.py": {
+        "character_count": 6637,
+        "token_estimate": 1659
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/impact_engine/traversal_policy.py": {
+        "character_count": 7262,
+        "token_estimate": 1815
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/incremental_runtime/snapshot_manager.py": {
+        "character_count": 1184,
+        "token_estimate": 296
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/language_config.py": {
+        "character_count": 3646,
+        "token_estimate": 911
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/main.py": {
+        "character_count": 9275,
+        "token_estimate": 2318
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/queries/javascript.scm": {
+        "character_count": 9464,
+        "token_estimate": 2366
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/quick_test.py": {
+        "character_count": 3090,
+        "token_estimate": 772
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/frameworks/express_route_normalizer.py": {
+        "character_count": 12108,
+        "token_estimate": 3027
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/graph_builder.py": {
+        "character_count": 55914,
+        "token_estimate": 13978
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/match_classifier.py": {
+        "character_count": 3441,
+        "token_estimate": 860
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/match_extractor_fixed.py": {
+        "character_count": 9387,
+        "token_estimate": 2346
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/test_runner_proper.py": {
+        "character_count": 12051,
+        "token_estimate": 3012
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/tests/run_all_tests.py": {
+        "character_count": 3405,
+        "token_estimate": 851
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/tests/test_mcp_server.py": {
+        "character_count": 4159,
+        "token_estimate": 1039
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/edit_recall_validation.py": {
+        "character_count": 26152,
+        "token_estimate": 6538
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_simulator.py": {
+        "character_count": 7235,
+        "token_estimate": 1808
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_trust_analyzer.py": {
+        "character_count": 7395,
+        "token_estimate": 1848
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_validator.py": {
+        "character_count": 5543,
+        "token_estimate": 1385
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/semantic_validator.py": {
+        "character_count": 14154,
+        "token_estimate": 3538
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test-patch.py": {
+        "character_count": 1179,
+        "token_estimate": 294
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test_microservice/api.js": {
+        "character_count": 621,
+        "token_estimate": 155
+      },
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test_microservice/controllers/userController.js": {
+        "character_count": 466,
+        "token_estimate": 116
+      },
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/package.json": {
+        "character_count": 544,
+        "token_estimate": 136
+      },
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/app.js": {
+        "character_count": 1297,
+        "token_estimate": 324
+      },
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/config/db.js": {
+        "character_count": 504,
+        "token_estimate": 126
+      },
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/middlewares/validation.middleware.js": {
+        "character_count": 557,
+        "token_estimate": 139
+      },
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/models/user.model.js": {
+        "character_count": 1742,
+        "token_estimate": 435
+      },
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js": {
+        "character_count": 1440,
+        "token_estimate": 360
+      },
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/server.js": {
+        "character_count": 1231,
+        "token_estimate": 307
+      },
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/analytics.service.js": {
+        "character_count": 2811,
+        "token_estimate": 702
+      },
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/auth.service.js": {
+        "character_count": 3237,
+        "token_estimate": 809
+      },
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/document.service.js": {
+        "character_count": 2802,
+        "token_estimate": 700
+      },
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/job.service.js": {
+        "character_count": 4367,
+        "token_estimate": 1091
+      }
+    },
+    "open_frequencies": {
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/EDIT_RECALL_REPORT.md": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REPOSITORY_AUDIT.md": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/build_graph.py": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/main.py": 2,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/language_config.py": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/graph_builder.py": 5,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/impact_engine/traversal_policy.py": 2,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/impact_engine/graph_traversal.py": 2,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/context_engine/context_extractor.py": 2,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/incremental_runtime/snapshot_manager.py": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/api/server.py": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/test_runner_proper.py": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/edit_recall_validation.py": 5,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/quick_test.py": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/semantic_validator.py": 2,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/frameworks/express_route_normalizer.py": 1,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/document.routes.js": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/queries/javascript.scm": 3,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/analytics.routes.js": 1,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/job.routes.js": 1,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/prompt-template.routes.js": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/match_classifier.py": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/match_extractor_fixed.py": 3,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/scratch/test_queries.py": 1,
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md": 8,
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/implementation_plan.md": 2,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/api/mcp_server.py": 5,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/tests/run_all_tests.py": 2,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test_microservice/api.js": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test_microservice/controllers/userController.js": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/tests/test_mcp_server.py": 1,
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/walkthrough.md": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_validator.py": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_simulator.py": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_trust_analyzer.py": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/edit_recall_results.json": 1,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-flow.js": 4,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/task_runner.py": 2,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/benchmark_results.json": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/BENCHMARK_REPORT.md": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/model_client.py": 5,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/.env": 2,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/middlewares/validation.middleware.js": 1,
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/model_client.py": 1,
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/task_runner.py": 1,
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/middlewares/validation.middleware.js": 1,
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js": 3,
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/sandbox_manager.py": 1,
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/package.json": 1,
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/app.js": 1,
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/server.js": 1,
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/config/db.js": 1,
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/auth.service.js": 1,
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/models/user.model.js": 1,
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/document.service.js": 1,
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/analytics.service.js": 1,
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/job.service.js": 1,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/mock-mongoose.js": 2,
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/scoring_engine.py": 1,
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/steps/597/output.txt": 1,
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/safety_checker.py": 1,
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_gemini_harness.py": 2,
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/tasks/task-651.log": 2,
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/tasks/task-712.log": 1,
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/patch_applier.py": 1,
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_validator.py": 1,
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_groq_harness.py": 1,
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REAL_GROQ_BENCHMARK_REPORT.md": 1,
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REAL_GEMINI_BENCHMARK_REPORT.md": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_groq_harness.py": 5,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REAL_GROQ_BENCHMARK_REPORT.md": 4,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_gemini_harness.py": 1,
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/walkthrough.md": 3,
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md": 1,
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/implementation_plan.md": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test-patch.py": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/sandbox_manager.py": 1,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/patch_applier.py": 1,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/auth.service.js": 1,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/document.service.js": 1,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/package.json": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/safety_checker.py": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/scoring_engine.py": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_comparison_harness.py": 1,
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/SEMANTIC_ENGINE_VS_BASELINE_REPORT.md": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/VIBECODING_REPORT.md": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/generate_vibecoding_report.py": 1,
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/logs/transcript.jsonl": 1,
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/logs/transcript.jsonl": 1,
+      "C:/Users/ajeem/.gemini/antigravity-ide/scratch/audit_report.json": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/vibecoding_metrics.json": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/agent_session_metrics.json": 1,
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/AGENT_SESSION_REPORT.md": 1
+    },
+    "opened_files_history": [
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/EDIT_RECALL_REPORT.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REPOSITORY_AUDIT.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/build_graph.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/main.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/language_config.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/graph_builder.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/graph_builder.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/graph_builder.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/graph_builder.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/graph_builder.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/impact_engine/traversal_policy.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/impact_engine/graph_traversal.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/context_engine/context_extractor.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/incremental_runtime/snapshot_manager.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/api/server.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/test_runner_proper.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/edit_recall_validation.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/quick_test.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/semantic_validator.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/frameworks/express_route_normalizer.py",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/document.routes.js",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/queries/javascript.scm",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/analytics.routes.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/job.routes.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/prompt-template.routes.js",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/match_classifier.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/match_extractor_fixed.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/queries/javascript.scm",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/queries/javascript.scm",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/match_extractor_fixed.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/semantic_core/match_extractor_fixed.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/scratch/test_queries.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/impact_engine/graph_traversal.py",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/implementation_plan.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/api/mcp_server.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/tests/run_all_tests.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/main.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/context_engine/context_extractor.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/impact_engine/traversal_policy.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test_microservice/api.js",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test_microservice/controllers/userController.js",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/tests/test_mcp_server.py",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/walkthrough.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/edit_recall_validation.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/edit_recall_validation.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/edit_recall_validation.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/edit_recall_validation.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_validator.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_simulator.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_trust_analyzer.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/semantic_validator.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/edit_recall_results.json",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-flow.js",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/task_runner.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/tests/run_all_tests.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/benchmark_results.json",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/BENCHMARK_REPORT.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/model_client.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/.env",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/middlewares/validation.middleware.js",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/implementation_plan.md",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/model_client.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/task_runner.py",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-flow.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-flow.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/middlewares/validation.middleware.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/sandbox_manager.py",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/package.json",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/app.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/server.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/config/db.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/auth.service.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/models/user.model.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/document.service.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/analytics.service.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/job.service.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/mock-mongoose.js",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/scoring_engine.py",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/steps/597/output.txt",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/safety_checker.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_gemini_harness.py",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/tasks/task-651.log",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/tasks/task-651.log",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/tasks/task-712.log",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_gemini_harness.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/patch_applier.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/validation/patch_validator.py",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js",
+      "c:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_groq_harness.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REAL_GROQ_BENCHMARK_REPORT.md",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REAL_GEMINI_BENCHMARK_REPORT.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/.env",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_groq_harness.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REAL_GROQ_BENCHMARK_REPORT.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_gemini_harness.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/model_client.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/task_runner.py",
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/walkthrough.md",
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md",
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/implementation_plan.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/test-patch.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/model_client.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/model_client.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_groq_harness.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_groq_harness.py",
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/walkthrough.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REAL_GROQ_BENCHMARK_REPORT.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REAL_GROQ_BENCHMARK_REPORT.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_groq_harness.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_groq_harness.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/sandbox_manager.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/REAL_GROQ_BENCHMARK_REPORT.md",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/patch_applier.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/model_client.py",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/auth.service.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/services/document.service.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-flow.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/package.json",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/mock-mongoose.js",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/safety_checker.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/scoring_engine.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/benchmark/run_comparison_harness.py",
+      "C:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/SEMANTIC_ENGINE_VS_BASELINE_REPORT.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/api/mcp_server.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/api/mcp_server.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/api/mcp_server.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/VIBECODING_REPORT.md",
+      "c:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/walkthrough.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/src/api/mcp_server.py",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/generate_vibecoding_report.py",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/.system_generated/logs/transcript.jsonl",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/logs/transcript.jsonl",
+      "C:/Users/ajeem/.gemini/antigravity-ide/scratch/audit_report.json",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/vibecoding_metrics.json",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/snapshots/agent_session_metrics.json",
+      "c:/Users/ajeem/Downloads/downloads/CoderReviewAgent2/token_reducer_system/AGENT_SESSION_REPORT.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bec51ff1-e8b6-4e57-a51a-85b324af07d8/task.md"
+    ]
+  },
+  "bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78": {
+    "session_id": "bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78",
+    "start_timestamp": "2026-06-08T18:20:53Z",
+    "end_timestamp": "2026-06-08T18:41:48Z",
+    "files_opened_count": 13,
+    "files_modified_count": 7,
+    "investigation_character_count": 52820,
+    "investigation_token_estimate": 13200,
+    "repo_tokens": 0,
+    "external_tokens": 4350,
+    "gemini_tokens": 8850,
+    "unique_files_opened": [
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/steps/27/output.txt",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/steps/35/output.txt",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/steps/61/output.txt",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/semantic_engine_analysis.md",
+      "C:/Users/ajeem/.gemini/antigravity-ide/mcp/semantic-context-engine/mcp_build_graph.json",
+      "C:/Users/ajeem/.gemini/antigravity-ide/mcp/semantic-context-engine/mcp_query_context.json",
+      "C:/Users/ajeem/.gemini/antigravity-ide/mcp/semantic-context-engine/mcp_show_graph_metrics.json",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/.env",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/package.json",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/app.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/models/user.model.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-flow.js"
+    ],
+    "unique_files_modified": [
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/scratch/test_mongo_version.js",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/semantic_engine_analysis.md",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/scratch_test.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/app.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/models/user.model.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-flow.js"
+    ],
+    "files_metadata": {
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/steps/27/output.txt": {
+        "character_count": 4207,
+        "token_estimate": 1051
+      },
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/steps/35/output.txt": {
+        "character_count": 19086,
+        "token_estimate": 4771
+      },
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/steps/61/output.txt": {
+        "character_count": 5666,
+        "token_estimate": 1416
+      },
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/semantic_engine_analysis.md": {
+        "character_count": 5035,
+        "token_estimate": 1258
+      },
+      "C:/Users/ajeem/.gemini/antigravity-ide/mcp/semantic-context-engine/mcp_build_graph.json": {
+        "character_count": 576,
+        "token_estimate": 144
+      },
+      "C:/Users/ajeem/.gemini/antigravity-ide/mcp/semantic-context-engine/mcp_query_context.json": {
+        "character_count": 634,
+        "token_estimate": 158
+      },
+      "C:/Users/ajeem/.gemini/antigravity-ide/mcp/semantic-context-engine/mcp_show_graph_metrics.json": {
+        "character_count": 209,
+        "token_estimate": 52
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/.env": {
+        "character_count": 173,
+        "token_estimate": 43
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/package.json": {
+        "character_count": 544,
+        "token_estimate": 136
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/app.js": {
+        "character_count": 1297,
+        "token_estimate": 324
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/models/user.model.js": {
+        "character_count": 1742,
+        "token_estimate": 435
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js": {
+        "character_count": 1440,
+        "token_estimate": 360
+      },
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-flow.js": {
+        "character_count": 12211,
+        "token_estimate": 3052
+      }
+    },
+    "open_frequencies": {
+      "C:/Users/ajeem/.gemini/antigravity-ide/mcp/semantic-context-engine/mcp_show_graph_metrics.json": 1,
+      "C:/Users/ajeem/.gemini/antigravity-ide/mcp/semantic-context-engine/mcp_build_graph.json": 1,
+      "C:/Users/ajeem/.gemini/antigravity-ide/mcp/semantic-context-engine/mcp_query_context.json": 1,
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/steps/27/output.txt": 1,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js": 1,
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/steps/35/output.txt": 1,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/package.json": 1,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/.env": 1,
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/steps/61/output.txt": 1,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-flow.js": 3,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/app.js": 1,
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/models/user.model.js": 1,
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/semantic_engine_analysis.md": 1
+    },
+    "opened_files_history": [
+      "C:/Users/ajeem/.gemini/antigravity-ide/mcp/semantic-context-engine/mcp_show_graph_metrics.json",
+      "C:/Users/ajeem/.gemini/antigravity-ide/mcp/semantic-context-engine/mcp_build_graph.json",
+      "C:/Users/ajeem/.gemini/antigravity-ide/mcp/semantic-context-engine/mcp_query_context.json",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/steps/27/output.txt",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/routes/auth.routes.js",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/steps/35/output.txt",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/package.json",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/.env",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/.system_generated/steps/61/output.txt",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-flow.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/app.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/src/models/user.model.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-flow.js",
+      "C:/Users/ajeem/Downloads/downloads/testing/testing1/test-flow.js",
+      "C:/Users/ajeem/.gemini/antigravity-ide/brain/bdbdb9aa-f8f9-4b1f-b37b-4f034d1caa78/semantic_engine_analysis.md"
+    ]
+  }
+}

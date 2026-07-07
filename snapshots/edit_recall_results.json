@@ -1,0 +1,425 @@
+{
+  "metrics": {
+    "avg_recall": 1.0,
+    "avg_precision": 0.9875,
+    "total_expected_files": 43,
+    "total_selected_files": 44,
+    "total_tp": 43,
+    "total_fp": 1,
+    "total_fn": 0,
+    "avg_context_size_chars": 2156.7,
+    "avg_context_size_tokens": 539.0,
+    "savings_pct": 96.71535181236673
+  },
+  "results": [
+    {
+      "id": 1,
+      "name": "Add lockout policy after 5 failed login attempts",
+      "target": "ROUTE:post:/login:src/routes/auth.routes.js",
+      "policy": "NEW_FEATURE",
+      "actual_files": [
+        "src/controllers/auth.controller.js",
+        "src/models/user.model.js",
+        "src/routes/auth.routes.js",
+        "src/services/auth.service.js"
+      ],
+      "selected_files": [
+        "src/controllers/auth.controller.js",
+        "src/models/user.model.js",
+        "src/routes/auth.routes.js",
+        "src/services/auth.service.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 3091,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 2,
+      "name": "Add database query audit logging to Document retrieval",
+      "target": "FUNCTION:src/services/document.service.js:getDocuments",
+      "policy": "LOCAL_EDIT",
+      "actual_files": [
+        "src/services/document.service.js"
+      ],
+      "selected_files": [
+        "src/services/document.service.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 941,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 3,
+      "name": "Change signature of createTemplate service",
+      "target": "FUNCTION:src/services/prompt-template.service.js:createTemplate",
+      "policy": "SIGNATURE_CHANGE",
+      "actual_files": [
+        "src/controllers/prompt-template.controller.js",
+        "src/services/prompt-template.service.js"
+      ],
+      "selected_files": [
+        "src/controllers/prompt-template.controller.js",
+        "src/services/prompt-template.service.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 794,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 4,
+      "name": "Change signature of calculateSavings in token estimation service",
+      "target": "FUNCTION:src/services/token-estimation.service.js:calculateSavings",
+      "policy": "SIGNATURE_CHANGE",
+      "actual_files": [
+        "src/services/job.service.js",
+        "src/services/token-estimation.service.js"
+      ],
+      "selected_files": [
+        "src/services/job.service.js",
+        "src/services/token-estimation.service.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 3048,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 5,
+      "name": "Add email verification flow",
+      "target": "ROUTE:get:/verify-email:src/routes/auth.routes.js",
+      "policy": "NEW_FEATURE",
+      "actual_files": [
+        "src/controllers/auth.controller.js",
+        "src/models/user.model.js",
+        "src/routes/auth.routes.js",
+        "src/services/auth.service.js"
+      ],
+      "selected_files": [
+        "src/controllers/auth.controller.js",
+        "src/models/user.model.js",
+        "src/routes/auth.routes.js",
+        "src/services/auth.service.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 2899,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 6,
+      "name": "Add pagination to Document fetching route",
+      "target": "ROUTE:get:/:src/routes/document.routes.js",
+      "policy": "NEW_FEATURE",
+      "actual_files": [
+        "src/controllers/document.controller.js",
+        "src/models/document.model.js",
+        "src/routes/document.routes.js",
+        "src/services/document.service.js"
+      ],
+      "selected_files": [
+        "src/controllers/document.controller.js",
+        "src/models/document.model.js",
+        "src/routes/document.routes.js",
+        "src/services/document.service.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 2296,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 7,
+      "name": "Add user field validation check in validateRequest",
+      "target": "FUNCTION:src/middlewares/validation.middleware.js:validateRequest",
+      "policy": "LOCAL_EDIT",
+      "actual_files": [
+        "src/middlewares/validation.middleware.js"
+      ],
+      "selected_files": [
+        "src/middlewares/validation.middleware.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 477,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 8,
+      "name": "Add compression ratio limits check in job creation",
+      "target": "ROUTE:post:/:src/routes/job.routes.js",
+      "policy": "NEW_FEATURE",
+      "actual_files": [
+        "src/controllers/job.controller.js",
+        "src/models/job.model.js",
+        "src/routes/job.routes.js",
+        "src/services/job.service.js"
+      ],
+      "selected_files": [
+        "src/controllers/job.controller.js",
+        "src/models/job.model.js",
+        "src/routes/job.routes.js",
+        "src/services/job.service.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 4349,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 9,
+      "name": "Add IP address logging to protect middleware",
+      "target": "FUNCTION:src/middlewares/auth.middleware.js:protect",
+      "policy": "LOCAL_EDIT",
+      "actual_files": [
+        "src/middlewares/auth.middleware.js"
+      ],
+      "selected_files": [
+        "src/middlewares/auth.middleware.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 1498,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 10,
+      "name": "Change signature of getStrategy in StrategyFactory",
+      "target": "FUNCTION:src/strategies/strategy.factory.js:getStrategy",
+      "policy": "SIGNATURE_CHANGE",
+      "actual_files": [
+        "src/services/job.service.js",
+        "src/strategies/strategy.factory.js"
+      ],
+      "selected_files": [
+        "src/services/job.service.js",
+        "src/strategies/strategy.factory.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 2851,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 11,
+      "name": "Add keyword character filtering inside KeywordExtractionStrategy",
+      "target": "FUNCTION:src/strategies/keyword-extraction.strategy.js:reduce",
+      "policy": "LOCAL_EDIT",
+      "actual_files": [
+        "src/strategies/keyword-extraction.strategy.js"
+      ],
+      "selected_files": [
+        "src/strategies/keyword-extraction.strategy.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 1783,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 12,
+      "name": "Add Custom Error subclass formatting in Error Middleware",
+      "target": "FUNCTION:src/middlewares/error.middleware.js:errorHandler",
+      "policy": "LOCAL_EDIT",
+      "actual_files": [
+        "src/middlewares/error.middleware.js"
+      ],
+      "selected_files": [
+        "src/middlewares/error.middleware.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 1410,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 13,
+      "name": "Add token tracking parameters to Document schema",
+      "target": "FUNCTION:src/models/document.model.js:GLOBAL_SCOPE",
+      "policy": "LOCAL_EDIT",
+      "actual_files": [
+        "src/models/document.model.js"
+      ],
+      "selected_files": [
+        "src/models/document.model.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 768,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 14,
+      "name": "Change signature of countTokens in token counter utility",
+      "target": "FUNCTION:src/utils/token-counter.js:countTokens",
+      "policy": "SIGNATURE_CHANGE",
+      "actual_files": [
+        "src/services/document.service.js",
+        "src/services/token-estimation.service.js",
+        "src/utils/token-counter.js"
+      ],
+      "selected_files": [
+        "src/services/document.service.js",
+        "src/services/token-estimation.service.js",
+        "src/utils/token-counter.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 2218,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 15,
+      "name": "Add templates paging to PromptTemplate controller",
+      "target": "ROUTE:get:/:src/routes/prompt-template.routes.js",
+      "policy": "NEW_FEATURE",
+      "actual_files": [
+        "src/controllers/prompt-template.controller.js",
+        "src/models/prompt-template.model.js",
+        "src/routes/prompt-template.routes.js",
+        "src/services/prompt-template.service.js"
+      ],
+      "selected_files": [
+        "src/controllers/prompt-template.controller.js",
+        "src/models/prompt-template.model.js",
+        "src/routes/prompt-template.routes.js",
+        "src/services/prompt-template.service.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 2807,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 16,
+      "name": "Add title regex search to Document query in service",
+      "target": "FUNCTION:src/services/document.service.js:getDocuments",
+      "policy": "LOCAL_EDIT",
+      "actual_files": [
+        "src/services/document.service.js"
+      ],
+      "selected_files": [
+        "src/services/document.service.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 941,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 17,
+      "name": "Add custom validation helper to validator utility",
+      "target": "FUNCTION:src/utils/custom-error.js:GLOBAL_SCOPE",
+      "policy": "LOCAL_EDIT",
+      "actual_files": [
+        "src/utils/custom-error.js"
+      ],
+      "selected_files": [
+        "src/utils/custom-error.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 222,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 18,
+      "name": "Add analytics aggregation categories",
+      "target": "ROUTE:get:/:src/routes/analytics.routes.js",
+      "policy": "NEW_FEATURE",
+      "actual_files": [
+        "src/controllers/analytics.controller.js",
+        "src/routes/analytics.routes.js",
+        "src/services/analytics.service.js"
+      ],
+      "selected_files": [
+        "src/controllers/analytics.controller.js",
+        "src/models/job.model.js",
+        "src/routes/analytics.routes.js",
+        "src/services/analytics.service.js"
+      ],
+      "recall": 1.0,
+      "precision": 0.75,
+      "missing_dependencies": [],
+      "extra_dependencies": [
+        "src/models/job.model.js"
+      ],
+      "context_char_size": 4783,
+      "status": "\ud83d\udfe1 SUFFICIENT (Extra files)"
+    },
+    {
+      "id": 19,
+      "name": "Change signature of getUserAnalytics in Analytics service",
+      "target": "FUNCTION:src/services/analytics.service.js:getUserAnalytics",
+      "policy": "SIGNATURE_CHANGE",
+      "actual_files": [
+        "src/controllers/analytics.controller.js",
+        "src/services/analytics.service.js"
+      ],
+      "selected_files": [
+        "src/controllers/analytics.controller.js",
+        "src/services/analytics.service.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 3077,
+      "status": "\ud83d\udfe2 PERFECT"
+    },
+    {
+      "id": 20,
+      "name": "Add punctuation scoring rule to Semantic Chunking Strategy",
+      "target": "FUNCTION:src/strategies/semantic-chunking.strategy.js:reduce",
+      "policy": "LOCAL_EDIT",
+      "actual_files": [
+        "src/strategies/semantic-chunking.strategy.js"
+      ],
+      "selected_files": [
+        "src/strategies/semantic-chunking.strategy.js"
+      ],
+      "recall": 1.0,
+      "precision": 1.0,
+      "missing_dependencies": [],
+      "extra_dependencies": [],
+      "context_char_size": 2881,
+      "status": "\ud83d\udfe2 PERFECT"
+    }
+  ]
+}

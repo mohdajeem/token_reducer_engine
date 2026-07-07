@@ -1,0 +1,73 @@
+; =============================================================================
+; SIMPLE ROUTES
+; router.get('/x', controller.method)
+; =============================================================================
+
+; =============================================================================
+; SIMPLE ROUTES WITH IDENTIFIER HANDLER
+; router.get('/x', handler)
+; =============================================================================
+
+(call_expression
+  function: (member_expression
+    object: (identifier) @router.obj
+    property: (property_identifier) @endpoint.served_method)
+
+  arguments: (arguments
+    .
+    (string
+      (string_fragment) @endpoint.served_route)
+
+    .
+    (identifier) @handler.function
+  )
+
+  (#match? @endpoint.served_method "^(get|post|put|delete|patch)$")
+)
+
+; =============================================================================
+; SIMPLE ROUTES (NO MIDDLEWARE)
+; =============================================================================
+
+(call_expression
+  function: (member_expression
+    object: (identifier) @router.obj
+    property: (property_identifier) @endpoint.served_method)
+
+  arguments: (arguments
+    .
+    (string
+      (string_fragment) @endpoint.served_route)
+
+    .
+    (member_expression
+      object: (identifier) @handler.controller
+      property: (property_identifier) @handler.function)
+  )
+
+  (#match? @endpoint.served_method "^(get|post|put|delete|patch)$")
+)
+
+; =============================================================================
+; ROUTES WITH MIDDLEWARE
+; router.post('/x', auth, controller.method)
+; =============================================================================
+
+(call_expression
+  function: (member_expression
+    object: (identifier) @router.obj
+    property: (property_identifier) @endpoint.served_method)
+
+  arguments: (arguments
+    (string
+      (string_fragment) @endpoint.served_route)
+
+    (identifier) @middleware.name
+
+    (member_expression
+      object: (identifier) @handler.controller
+      property: (property_identifier) @handler.function)
+  )
+
+  (#match? @endpoint.served_method "^(get|post|put|delete|patch)$")
+)

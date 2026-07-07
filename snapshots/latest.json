@@ -1,0 +1,295 @@
+{
+  "imports": {
+    "api.js": [
+      {
+        "source": "express",
+        "name": "express",
+        "alias": null
+      },
+      {
+        "source": "./controllers/userController.js",
+        "name": "userController",
+        "alias": null
+      }
+    ],
+    "controllers/userController.js": [
+      {
+        "source": "validator",
+        "name": "validator",
+        "alias": null
+      },
+      {
+        "source": "../services/userService.js",
+        "name": "userService",
+        "alias": null
+      }
+    ]
+  },
+  "routes": {
+    "api.js": [
+      {
+        "method": "get",
+        "path": "/users",
+        "router": "router",
+        "handler": {
+          "controller": "userController",
+          "function": "getAllUsers",
+          "resolved_file": "controllers/userController.js",
+          "resolved_function": {
+            "name": "getAllUsers",
+            "file": "controllers/userController.js",
+            "start_line": 9,
+            "end_line": 22
+          }
+        }
+      },
+      {
+        "method": "post",
+        "path": "/login",
+        "router": "router",
+        "handler": {
+          "controller": "authController",
+          "function": "login",
+          "resolved_file": null,
+          "resolved_function": null
+        }
+      }
+    ]
+  },
+  "calls": {
+    "api.js": [
+      {
+        "call_id": "api.js:308:344",
+        "object": "route",
+        "function": "get",
+        "resolved_file": null,
+        "resolved_function": null,
+        "caller_function": null
+      }
+    ],
+    "controllers/userController.js": [
+      {
+        "call_id": "controllers/userController.js:195:250",
+        "object": "validator",
+        "function": "escape",
+        "resolved_file": "controllers/validator.js",
+        "resolved_function": null,
+        "caller_function": "getAllUsers"
+      },
+      {
+        "call_id": "controllers/userController.js:268:356",
+        "object": "userService",
+        "function": "fetchUsers",
+        "resolved_file": "services/userService.js",
+        "resolved_function": {
+          "name": "fetchUsers",
+          "file": "services/userService.js",
+          "start_line": 16,
+          "end_line": 27
+        },
+        "caller_function": "getAllUsers"
+      },
+      {
+        "call_id": "controllers/userController.js:386:425",
+        "object": "validator",
+        "function": "escape",
+        "resolved_file": "controllers/validator.js",
+        "resolved_function": null,
+        "caller_function": null
+      }
+    ],
+    "services/userService.js": [
+      {
+        "call_id": "services/userService.js:280:333",
+        "object": "User",
+        "function": "find",
+        "resolved_file": null,
+        "resolved_function": null,
+        "caller_function": "fetchUsers"
+      }
+    ]
+  },
+  "database": {
+    "services/userService.js": [
+      {
+        "model": "User",
+        "operation": "find",
+        "query": null,
+        "connection": null,
+        "function": "fetchUsers"
+      }
+    ]
+  },
+  "errors": {},
+  "contracts": {},
+  "execution_edges": [
+    {
+      "from": {
+        "type": "ROUTE",
+        "route": "/users",
+        "method": "get"
+      },
+      "to": {
+        "type": "FUNCTION",
+        "file": "controllers/userController.js",
+        "function": "getAllUsers",
+        "resolved_function": {
+          "name": "getAllUsers",
+          "file": "controllers/userController.js",
+          "start_line": 9,
+          "end_line": 22
+        }
+      },
+      "type": "ROUTE_CALL"
+    },
+    {
+      "from": {
+        "type": "ROUTE",
+        "route": "/login",
+        "method": "post"
+      },
+      "to": {
+        "type": "FUNCTION",
+        "file": null,
+        "function": "login",
+        "resolved_function": null
+      },
+      "type": "ROUTE_CALL"
+    },
+    {
+      "from": {
+        "type": "FUNCTION",
+        "file": "controllers/userController.js",
+        "function": "getAllUsers"
+      },
+      "to": {
+        "type": "FUNCTION",
+        "file": "services/userService.js",
+        "function": "fetchUsers"
+      },
+      "type": "FUNCTION_CALL"
+    },
+    {
+      "from": {
+        "type": "FUNCTION",
+        "file": "services/userService.js",
+        "function": "fetchUsers"
+      },
+      "to": {
+        "type": "DATABASE",
+        "model": "User",
+        "operation": "find"
+      },
+      "type": "DB_ACCESS"
+    }
+  ],
+  "parameters": {
+    "controllers/userController.js": [
+      {
+        "function": "getAllUsers",
+        "params": [
+          "req",
+          "res"
+        ]
+      }
+    ],
+    "services/userService.js": [
+      {
+        "function": "fetchUsers",
+        "params": [
+          "email",
+          "password"
+        ]
+      }
+    ]
+  },
+  "arguments": {
+    "api.js": [],
+    "controllers/userController.js": [
+      {
+        "call_id": "controllers/userController.js:195:250",
+        "function": "getAllUsers",
+        "arguments": [
+          "req.body.email"
+        ]
+      },
+      {
+        "call_id": "controllers/userController.js:268:356",
+        "function": "getAllUsers",
+        "arguments": [
+          "safeEmail",
+          "req.body.password"
+        ]
+      }
+    ],
+    "services/userService.js": [
+      {
+        "call_id": "services/userService.js:280:333",
+        "function": "fetchUsers",
+        "arguments": [
+          "{\n            password: password\n        }"
+        ]
+      }
+    ]
+  },
+  "data_flow": [
+    {
+      "source": "safeEmail",
+      "target_file": "services/userService.js",
+      "target_function": "fetchUsers",
+      "target_param": "email"
+    },
+    {
+      "source": "req.body.password",
+      "target_file": "services/userService.js",
+      "target_function": "fetchUsers",
+      "target_param": "password"
+    }
+  ],
+  "taint_sources": [
+    {
+      "type": "USER_INPUT",
+      "file": "services/userService.js",
+      "source": "req.body.password",
+      "target_function": "fetchUsers",
+      "target_param": "password"
+    }
+  ],
+  "security_sinks": [
+    {
+      "type": "MONGODB_QUERY",
+      "file": "services/userService.js",
+      "target_function": "fetchUsers",
+      "model": "User",
+      "operation": "find"
+    }
+  ],
+  "security_findings": [
+    {
+      "type": "NOSQL_INJECTION",
+      "severity": "HIGH",
+      "source": "req.body.password",
+      "sink": "find",
+      "model": "User",
+      "target_function": "fetchUsers"
+    }
+  ],
+  "sanitizers": [
+    {
+      "file": "controllers/userController.js",
+      "function": "escape",
+      "caller_function": "getAllUsers"
+    }
+  ],
+  "variable_states": [
+    {
+      "file": "controllers/userController.js",
+      "function": "getAllUsers",
+      "variable": "safeEmail",
+      "value": "validator.escape(\n\n            req.body.email\n        )",
+      "tainted": false,
+      "sanitized": true
+    }
+  ],
+  "returns": []
+}

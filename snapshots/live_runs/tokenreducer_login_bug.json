@@ -1,0 +1,26 @@
+{
+  "run_id": "tokenreducer_login_bug",
+  "task_name": "login bug",
+  "mode": "token_reducer",
+  "start_time": 1781697626.4808125,
+  "end_time": 1781697626.4808125,
+  "categories": {
+    "user_tokens": 5000,
+    "planner_tokens": 2000,
+    "file_view_tokens": 3000,
+    "search_tokens": 0,
+    "mcp_tokens": 0,
+    "command_tokens": 2843,
+    "diagnostic_tokens": 0,
+    "tool_output_tokens": 0
+  },
+  "total_tokens": 12843,
+  "files_opened": [
+    "src/routes/auth.routes.js",
+    "src/services/auth.service.js"
+  ],
+  "files_modified": [
+    "src/controllers/auth.controller.js"
+  ],
+  "execution_time_seconds": 0.0
+}

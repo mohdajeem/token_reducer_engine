@@ -46,6 +46,9 @@ mcp = FastMCP("Semantic Context Engine")
 SERVER_STATE = {
     "repo_path": None,
     "graph": None,
+    # the GraphBuilder that built `graph` (symbol table, function index, option defaults):
+    # incremental updates need it to resolve cross-file exactly like the original build
+    "builder": None,
     "lock": threading.Lock(),
     "watcher": None
 }
@@ -105,44 +108,34 @@ def mcp_build_graph(repo_path: str, force_rebuild: bool = False, watch: bool = F
                 if cached_graph:
                     changed_files = change_detector.get_changed_files(repo_path)
                     if changed_files:
-                        rebuild_incrementally = True
-                        print(f"Incrementally updating {len(changed_files)} changed files for: {repo_path}...", file=sys.stderr)
-                        with redirect_stdout_to_stderr():
-                            from incremental_runtime.graph_invalidator import GraphInvalidator
-                            from language_config import LANG_CONFIG
-                            from tree_sitter import Parser, Query, QueryCursor
-                            from semantic_core.match_extractor_fixed import safe_extract_semantic_matches
-
-                            invalidator = GraphInvalidator()
-                            builder = GraphBuilder()
-                            builder.graph = cached_graph
-
-                            for rel_p in changed_files:
-                                abs_p = os.path.join(repo_path, rel_p)
-                                if os.path.exists(abs_p):
-                                    invalidator.invalidate_file(cached_graph, rel_p)
-                                    ext = os.path.splitext(abs_p)[1]
-                                    if ext in LANG_CONFIG:
-                                        lang = LANG_CONFIG[ext]["LANGUAGE"]
-                                        parser = Parser(lang)
-                                        with open(abs_p, "r", encoding="utf-8", errors="ignore") as f:
-                                            code = f.read()
-                                        tree = parser.parse(bytes(code, "utf-8"))
-                                        from build_graph import _compiled_query
-                                        query = _compiled_query(ext)
-                                        raw_matches = QueryCursor(query).matches(tree.root_node)
-                                        matches = safe_extract_semantic_matches(raw_matches, rel_p, tree)
-                                        builder.build_file(rel_p, matches)
-
-                            builder.build_argument_parameter_flow()
-                            builder.detect_taint_sources()
-                            graph = builder.graph
+                        # a live builder for THIS repo, else one restored from the snapshot;
+                        # a snapshot without builder state cannot be updated correctly -> rebuild
+                        builder = SERVER_STATE.get("builder") if SERVER_STATE.get("repo_path") == repo_path else None
+                        live_graph = SERVER_STATE.get("graph") if builder is not None else None
+                        if builder is None:
+                            from build_graph import restore_builder
+                            builder = restore_builder(cached_graph, repo_path)
+                            live_graph = cached_graph if builder is not None else None
+                        if builder is not None:
+                            rebuild_incrementally = True
+                            print(f"Incrementally updating {len(changed_files)} changed files for: {repo_path}...", file=sys.stderr)
+                            with redirect_stdout_to_stderr():
+                                from incremental_runtime.incremental_update import apply_update
+                                apply_update(builder, live_graph, repo_path, changed_files)
+                            graph = live_graph
+                            SERVER_STATE["builder"] = builder
                             snapshot_mgr.save_snapshot(graph, "graph")
+                        else:
+                            print(f"Snapshot has no builder state; rebuilding {repo_path} in full.", file=sys.stderr)
                     else:
                         graph = cached_graph
                         loaded_from_cache = True
+                        if SERVER_STATE.get("repo_path") != repo_path or SERVER_STATE.get("builder") is None:
+                            from build_graph import restore_builder
+                            SERVER_STATE["builder"] = restore_builder(graph, repo_path)
             except Exception as e:
                 print(f"Failed to load cached graph: {e}", file=sys.stderr)
+                graph = None
 
         if graph is None:
             # Compile graph
@@ -150,6 +143,8 @@ def mcp_build_graph(repo_path: str, force_rebuild: bool = False, watch: bool = F
                 print(f"Building semantic graph for: {repo_path}...", file=sys.stderr)
                 with redirect_stdout_to_stderr():
                     graph = build_graph(repo_path)
+                    import build_graph as _bg
+                    SERVER_STATE["builder"] = _bg.GLOBAL_BUILDER
                     # Save cache and initial hashes
                     snapshot_mgr.save_snapshot(graph, "graph")
                     change_detector.get_changed_files(repo_path)

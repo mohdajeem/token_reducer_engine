@@ -62,6 +62,24 @@ class FunctionIndex:
             function_name
         ] = metadata
 
+    def forget_file(self, file_path):
+        file_path = os.path.normpath(file_path).replace("\\", "/")
+        self.functions.pop(file_path, None)
+        self.all_defs.pop(file_path, None)
+
+    def rebuild_from_graph(self, graph):
+        """Reconstruct the index from graph["functions"] (what handle_function_def registered:
+        the bare name, and Class.name for methods). Used when a snapshot is loaded."""
+        self.functions = {}
+        self.all_defs = {}
+        for file_path, fns in (graph.get("functions") or {}).items():
+            for meta in fns:
+                if not isinstance(meta, dict) or not meta.get("name"):
+                    continue
+                if meta.get("class"):
+                    self.register_function(file_path, f"{meta['class']}.{meta['name']}", meta)
+                self.register_function(file_path, meta["name"], meta)
+
     def resolve_nearest(self, file_path, function_name, call_line):
         """For a bare call inside file_path: the same-named MODULE-LEVEL definition closest
         before the call (bundles define `edit$1` twice; the nearest one is in scope), else the

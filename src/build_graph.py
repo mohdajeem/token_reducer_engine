@@ -286,6 +286,104 @@ def extract_option_defaults(tree, source: bytes) -> dict:
     return out
 
 
+def index_file(directory, rel_path):
+    """
+    Everything the graph needs from one file: semantic matches (is_test set), string literals,
+    option defaults and the frameworks its imports reveal. Shared by the full build and the
+    incremental update so both produce the same graph for the same file.
+    Returns (matches, literals, option_defaults, frameworks) or None if the file is skipped.
+    """
+    from semantic_core.match_extractor_fixed import safe_extract_semantic_matches
+    file = os.path.basename(rel_path)
+    _, ext = os.path.splitext(file)
+    if not langmanager.is_supported(ext):
+        return None
+    if file.endswith((".min.js", ".min.mjs", ".min.cjs")):
+        return None
+    if is_test_path(rel_path) and not index_tests_for(ext):
+        return None
+    abs_path = os.path.join(directory, rel_path)
+    with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+    tree = parse_content(content, ext)
+    matches = QueryCursor(_compiled_query(ext)).matches(tree.root_node)
+    semantic_matches = safe_extract_semantic_matches(matches, rel_path, tree)
+    frameworks = set()
+    for sm in semantic_matches:
+        if sm.match_type == "IMPORT":
+            src_pkg = (sm.get("import.source") or "").split("/")[0]
+            for fw, pkg in _FRAMEWORK_KEYS.items():
+                if src_pkg == pkg or src_pkg == fw:
+                    frameworks.add(fw)
+    if is_test_path(rel_path):
+        for sm in semantic_matches:
+            sm.is_test = True
+    src_bytes = bytes(content, "utf-8")
+    lits = extract_literals(tree, src_bytes)
+    defaults = {} if (is_test_path(rel_path) or is_bundle_path(rel_path)) else extract_option_defaults(tree, src_bytes)
+    return semantic_matches, lits, defaults, frameworks
+
+
+def build_symbol_index(graph):
+    """Reverse index name -> [files] (bare names, dotted names, Class.method); recomputed
+    after every incremental update -- a stale index answers FUNCTION:name wrongly."""
+    symbol_index = {}
+    for file_path, fns in (graph.get("functions") or {}).items():
+        norm_file = file_path.replace("\\", "/")
+        for fn in fns:
+            name = fn.get("name") if isinstance(fn, dict) else fn
+            if not name:
+                continue
+            short_name = name.split(".")[-1]
+            if norm_file not in symbol_index.setdefault(short_name, []):
+                symbol_index[short_name].append(norm_file)
+            if name != short_name and norm_file not in symbol_index.setdefault(name, []):
+                symbol_index[name].append(norm_file)
+            if isinstance(fn, dict) and fn.get("class"):
+                key = f"{fn['class']}.{name}"
+                if norm_file not in symbol_index.setdefault(key, []):
+                    symbol_index[key].append(norm_file)
+    for file_path, cls_list in (graph.get("classes") or {}).items():
+        norm_file = file_path.replace("\\", "/")
+        names = cls_list.keys() if isinstance(cls_list, dict) else [c.get("name") if isinstance(c, dict) else c for c in cls_list]
+        for name in names:
+            if name and norm_file not in symbol_index.setdefault(name, []):
+                symbol_index[name].append(norm_file)
+    graph["symbol_index"] = symbol_index
+    return symbol_index
+
+
+def builder_state(builder, directory):
+    """The small part of the builder that is not derivable from the graph, persisted with the
+    snapshot so an incremental update after a cold start resolves cross-file exactly like the
+    original build did."""
+    return {
+        "symbol_table": builder.symbol_table.to_state(),
+        "option_defaults": builder.option_defaults,
+        "frameworks": sorted(builder.frameworks),
+        "param_candidates": {"|".join(k): v for k, v in builder.param_candidates.items()},
+        "project_root": os.path.abspath(directory),
+    }
+
+
+def restore_builder(graph, directory):
+    """A GraphBuilder positioned on `graph` as if it had just built it. Returns None when the
+    snapshot predates builder-state persistence (caller must rebuild)."""
+    state = graph.get("_builder")
+    if not state:
+        return None
+    b = GraphBuilder()
+    b.graph = graph
+    b.project_root = directory
+    b.symbol_table.project_root = directory
+    b.symbol_table.load_state(state.get("symbol_table") or {})
+    b.option_defaults = dict(state.get("option_defaults") or {})
+    b.frameworks = set(state.get("frameworks") or [])
+    b.param_candidates = {tuple(k.split("|")): v for k, v in (state.get("param_candidates") or {}).items()}
+    b.function_index.rebuild_from_graph(graph)
+    return b
+
+
 def build_graph(directory):
     global GLOBAL_BUILDER
     # first check SemanticGraph
@@ -320,48 +418,22 @@ def build_graph(directory):
                 directory
             ).replace("\\", "/")
 
-            _, ext = os.path.splitext(file)
-
-            if not langmanager.is_supported(ext):
-                continue
-            if file.endswith((".min.js", ".min.mjs", ".min.cjs")):
-                continue  # minified output: one-letter classes, no value as context
-            if is_test_path(rel_path) and not index_tests_for(ext):
-                continue
-
             if DEBUG_GRAPH_BUILD:
                 print(f"📄 Parsing: {rel_path}")
 
             try:
-                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-
-                tree = parse_content(content, ext)
-                query = _compiled_query(ext)
-                cursor = QueryCursor(query)
-                matches = cursor.matches(tree.root_node)
-                from semantic_core.match_extractor_fixed import safe_extract_semantic_matches
-
-                semantic_matches = safe_extract_semantic_matches(matches, rel_path, tree)
-                # a repo that imports express/mongoose/... uses it, manifest or not
-                for sm in semantic_matches:
-                    if sm.match_type == "IMPORT":
-                        src_pkg = (sm.get("import.source") or "").split("/")[0]
-                        for fw, pkg in _FRAMEWORK_KEYS.items():
-                            if src_pkg == pkg or src_pkg == fw:
-                                frameworks.add(fw)
-                if is_test_path(rel_path):
-                    for sm in semantic_matches:
-                        sm.is_test = True
+                indexed = index_file(directory, rel_path)
+                if indexed is None:
+                    continue
+                semantic_matches, lits, defaults, fws = indexed
+                frameworks |= fws
                 registry.add_matches(semantic_matches)
-                lits = extract_literals(tree, bytes(content, "utf-8"))
                 if lits:
                     literals[rel_path] = lits
-                if not is_test_path(rel_path) and not is_bundle_path(rel_path):
-                    for k, t in extract_option_defaults(tree, bytes(content, "utf-8")).items():
-                        if k in option_defaults and option_defaults[k] != t:
-                            option_conflicts.add(k)
-                        option_defaults.setdefault(k, t)
+                for k, t in defaults.items():
+                    if k in option_defaults and option_defaults[k] != t:
+                        option_conflicts.add(k)
+                    option_defaults.setdefault(k, t)
             except Exception as e:
                 print(f"[WARNING] Skipped indexing {rel_path} due to error: {e}")
                 continue
@@ -388,40 +460,10 @@ def build_graph(directory):
     if sidecar_report:
         graph["type_sidecar"] = sidecar_report
 
-    # Build reverse symbol_index (function/class name -> [file_path, ...])
-    symbol_index = {}
-    functions = graph.get("functions", {})
-    for file_path, fns in functions.items():
-        norm_file = file_path.replace("\\", "/")
-        for fn in fns:
-            name = fn.get("name") if isinstance(fn, dict) else fn
-            if name:
-                short_name = name.split(".")[-1]
-                if norm_file not in symbol_index.setdefault(short_name, []):
-                    symbol_index[short_name].append(norm_file)
-                if name != short_name and norm_file not in symbol_index.setdefault(name, []):
-                    symbol_index[name].append(norm_file)
-
-    classes = graph.get("classes", {})
-    for file_path, cls_list in classes.items():
-        norm_file = file_path.replace("\\", "/")
-        for cls in cls_list:
-            name = cls.get("name") if isinstance(cls, dict) else cls
-            if name and norm_file not in symbol_index.setdefault(name, []):
-                symbol_index[name].append(norm_file)
-
-    # Class-qualified entries: "Engine.tick" -> [file]; lets a target spec name the class.
-    for file_path, fns in functions.items():
-        norm_file = file_path.replace("\\", "/")
-        for fn in fns:
-            if isinstance(fn, dict) and fn.get("class") and fn.get("name"):
-                key = f"{fn['class']}.{fn['name']}"
-                if norm_file not in symbol_index.setdefault(key, []):
-                    symbol_index[key].append(norm_file)
-
-    graph["symbol_index"] = symbol_index
     graph["literals"] = literals
     graph["frameworks"] = sorted(frameworks)
+    build_symbol_index(graph)
+    graph["_builder"] = builder_state(builder, directory)
     return graph
 
 

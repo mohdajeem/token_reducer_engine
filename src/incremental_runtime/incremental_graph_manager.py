@@ -105,97 +105,13 @@ class IncrementalGraphManager:
     # REBUILD FILE
     # ======================================================
 
-    def rebuild_file(
+    def rebuild_file(self, graph, file_path):
+        """Delegates to incremental_runtime.incremental_update so the watcher produces the
+        same graph as a full build (the previous per-file rebuild lost cross-file edges)."""
+        from incremental_runtime.incremental_update import apply_update
+        apply_update(self.graph_builder, graph, self.project_root, [file_path])
+        return graph
 
-        self,
-
-        graph,
-
-        file_path
-    ):
-
-        print("\n")
-        print("=" * 80)
-        print(f"♻️ REBUILDING FILE: {file_path}")
-        print("=" * 80)
-
-        # ==================================================
-        # INVALIDATE OLD STATE
-        # ==================================================
-
-        graph = (
-
-            self.invalidator
-            .invalidate_file(
-
-                graph,
-
-                file_path
-            )
-        )
-
-        # ==================================================
-        # ABSOLUTE FILE PATH
-        # ==================================================
-
-        import os
-
-        absolute_path = os.path.join(
-
-            self.project_root,
-
-            file_path
-        )
-        # ==================================================
-        # EXTRACT MATCHES
-        # ==================================================
-        from language_config import LANG_CONFIG
-        from tree_sitter import Parser, Query, QueryCursor
-        from semantic_core.match_extractor_fixed import safe_extract_semantic_matches
-
-        ext = os.path.splitext(absolute_path)[1]
-        semantic_matches = []
-        if ext in LANG_CONFIG and os.path.exists(absolute_path):
-            lang = LANG_CONFIG[ext]["LANGUAGE"]
-            parser = Parser(lang)
-            with open(absolute_path, "r", encoding="utf-8", errors="ignore") as f:
-                code = f.read()
-            tree = parser.parse(bytes(code, "utf-8"))
-            from build_graph import _compiled_query
-            query = _compiled_query(ext)
-            raw_matches = QueryCursor(query).matches(tree.root_node)
-            semantic_matches = safe_extract_semantic_matches(raw_matches, file_path, tree)
-
-
-        # ==================================================
-        # REBUILD FILE SEMANTICS
-        # ==================================================
-
-        self.graph_builder.graph = (
-            graph
-        )
-
-        updated_graph = (
-
-            self.graph_builder
-            .build_file(
-
-                file_path,
-
-                semantic_matches
-            )
-        )
-
-        return updated_graph
-
-    
-
-
-    # ======================================================
-    # RUN INCREMENTAL UPDATE
-    # ======================================================
-
-    # def run_incremental_update(self):
     def run_incremental_update(
 
         self,

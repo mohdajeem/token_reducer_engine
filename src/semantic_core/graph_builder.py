@@ -285,9 +285,41 @@ class GraphBuilder:
         # BUILD DATA FLOW
         # ======================================================
 
-        self.build_argument_parameter_flow()
-        self.infer_parameter_types_from_flow()
-        self.resolve_pending_calls()
+        return self.finalize()
+
+    def ingest(self, semantic_matches):
+        """The per-match passes of build() for a subset of files (incremental updates), without
+        the graph-wide post-passes. Call finalize() once afterwards."""
+        self._finalized = False
+        saved = self.graph
+        # build() runs the per-match passes then finalize(); run only the per-match part by
+        # temporarily replacing finalize with a no-op
+        self._skip_finalize = True
+        try:
+            self.build(semantic_matches)
+        finally:
+            self._skip_finalize = False
+        return self.graph
+
+    def finalize(self):
+        """Graph-wide passes after all matches are in: argument->parameter flow, late type
+        inference, unresolved-call resolution, taint / security analysis."""
+        if getattr(self, "_skip_finalize", False):
+            return self.graph
+        # Late inference is a fixpoint: a call resolved by round N creates argument->parameter
+        # flow that types a parameter, which resolves more calls in round N+1. Iterate until
+        # nothing new resolves (bounded) so the result does not depend on how many times
+        # finalize() has run -- an incremental update must land on the same graph as a full
+        # build. Rounds after the first only cost the flow/inference passes (no re-parse).
+        for _round in range(4):
+            before = sum(1 for calls in self.graph["calls"].values() for c in calls if c.get("resolved_function"))
+            self.graph["data_flow"] = []
+            self.build_argument_parameter_flow()
+            self.infer_parameter_types_from_flow()
+            self.resolve_pending_calls()
+            after = sum(1 for calls in self.graph["calls"].values() for c in calls if c.get("resolved_function"))
+            if after == before:
+                break
 
         # ======================================================
         # DETECT TAINT SOURCES
@@ -1168,6 +1200,12 @@ class GraphBuilder:
         for sm in semantic_matches:
             if sm.match_type == "CALL" and not sm.get("call.obj_name") and sm.get("call.func_name"):
                 called.add(sm.get("call.func_name"))
+        # incremental update: the callers of this file's values live in files that are not
+        # in this batch -- their recorded calls count too
+        for calls in self.graph.get("calls", {}).values():
+            for c in calls:
+                if not c.get("receiver") and c.get("function"):
+                    called.add(c["function"])
         if not called:
             return
         for sm in semantic_matches:
@@ -1316,6 +1354,7 @@ class GraphBuilder:
                     "call_id": self.build_call_id(sm), "object": None, "receiver": None, "function": "cls",
                     "resolved_file": cls_file, "resolved_function": cmeta, "resolved_class": sm.owner_class,
                     "resolution": "typed", "caller_function": sm.owner_function,
+                    "caller_class": getattr(sm, "owner_class", None), "is_test": bool(getattr(sm, "is_test", False)),
                 })
                 self.add_execution_edge(from_node=self._from_node(sm),
                                         to_node={"type": "FUNCTION", "file": cls_file, "function": sm.owner_class},
@@ -1356,6 +1395,8 @@ class GraphBuilder:
                 "resolved_class": typed_meta.get("class") or typed_class,
                 "resolution": "typed",
                 "caller_function": sm.owner_function,
+                "caller_class": getattr(sm, "owner_class", None),
+                "is_test": bool(getattr(sm, "is_test", False)),
             })
             self.add_execution_edge(
                 from_node=self._from_node(sm),

@@ -50,6 +50,19 @@ class SymbolTable:
             out = os.path.relpath(out, project_root).replace("\\", "/")
         return out
 
+    def forget_file(self, file_path):
+        file_path = os.path.normpath(str(file_path)).replace("\\", "/")
+        for table in (self.imports, self.aliases, self.destructured, self.types, self.imported_names):
+            table.pop(file_path, None)
+
+    def to_state(self):
+        return {"imports": self.imports, "aliases": self.aliases, "destructured": self.destructured,
+                "types": self.types, "imported_names": self.imported_names}
+
+    def load_state(self, state):
+        for key in ("imports", "aliases", "destructured", "types", "imported_names"):
+            setattr(self, key, dict(state.get(key) or {}))
+
     _PY_ROOTS_CACHE = {}
 
     def _python_search_roots(self, abs_file):

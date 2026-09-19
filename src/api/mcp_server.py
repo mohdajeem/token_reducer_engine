@@ -449,7 +449,8 @@ def mcp_impact_analysis(
                 "upstream_nodes": [edge["from"] for edge in upstream],
                 "downstream_nodes": [edge["to"] for edge in downstream],
                 "upstream_edges": upstream,
-                "downstream_edges": downstream
+                "downstream_edges": downstream,
+                "completeness": impact_completeness(graph, target_node, upstream, downstream, include_tests),
             }
         except Exception as e:
             return {"error": f"Failed to analyze impact: {e}"}
@@ -704,6 +705,57 @@ def mcp_expand_signature(file_path: str, function_name: str) -> str:
         except Exception as e:
             return f"Error: {e}"
 
+
+# ==========================================================
+# COMPLETENESS -- every impact answer says how much of it is known
+# ==========================================================
+def _edge_confidence(edge):
+    return edge.get("confidence") or "resolved"
+
+
+def impact_completeness(graph, target_node, upstream, downstream, include_tests=False):
+    """
+    The graph is a LOWER BOUND on real dependencies: a call the builder could not resolve is a
+    caller it cannot report. This block makes that visible on every impact answer:
+      unresolved_calls_to_name -- call sites of the target's NAME that resolved to nothing (each
+                                  may be a missed caller); listed with file / caller / receiver
+      external_calls_to_name   -- same-named calls that are library / builtin (not missed)
+      low_confidence_edges     -- reported edges that came from a name-unique or multi-candidate
+                                  resolution rather than a typed / imported one
+      verdict                  -- "complete" (no unresolved same-name calls), "partial" (some),
+                                  "unknown" (target not in graph)
+    """
+    name = (target_node or {}).get("function")
+    if not name:
+        return {"verdict": "unknown"}
+    unresolved, external = [], []
+    for file, calls in (graph.get("calls") or {}).items():
+        if not include_tests and any(part in {"test", "tests", "__tests__", "spec", "testing"} for part in file.split("/")[:-1]):
+            continue
+        for c in calls:
+            if c.get("function") != name or c.get("resolved_function"):
+                continue
+            entry = {"file": file, "caller": c.get("caller_function") or "GLOBAL_SCOPE", "receiver": c.get("receiver")}
+            if c.get("external"):
+                entry["package"] = c["external"]
+                external.append(entry)
+            else:
+                unresolved.append(entry)
+    low = [{"from": e.get("from"), "to": e.get("to"), "confidence": _edge_confidence(e)}
+           for e in list(upstream) + list(downstream) if _edge_confidence(e) != "resolved"]
+    out = {
+        "verdict": "complete" if not unresolved else "partial",
+        "unresolved_calls_to_name": len(unresolved),
+        "unresolved_examples": unresolved[:10],
+        "external_calls_to_name": len(external),
+        "low_confidence_edges": len(low),
+        "low_confidence_examples": low[:10],
+    }
+    if unresolved:
+        out["note"] = (f"{len(unresolved)} call(s) named '{name}' could not be attributed to a definition; "
+                       f"any of them may be a caller of this target. Confirm with mcp_find_symbols / search "
+                       f"before treating the blast radius as complete.")
+    return out
 
 # ==========================================================
 # DISCOVERY TOOLS -- symbol / literal search and neighbourhoods

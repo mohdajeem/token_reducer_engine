@@ -84,6 +84,9 @@ FIXTURE = {
             def put(self, v):
                 return v
 
+            def warm_up(self):
+                return 'warm'
+
             def spin(self):
                 return "cache-spin"
         """),
@@ -105,6 +108,7 @@ FIXTURE = {
 
         def by_name(x):
             x.put(2)
+            x.warm_up()
             x.spin()
             return pkg.core.parts.Gear()
         """),
@@ -184,8 +188,10 @@ def main():
     check("self.gear typed from string annotation 'parts.Gear' -> Gear.spin", c is not None and c.get("resolved_class") == "Gear", c)
     c = ec.get(("self.cache", "put"))
     check("self.cache = parts.Cache() -> self.cache.put() resolves to Cache.put", c is not None and c.get("resolved_class") == "Cache", c)
+    c = ac.get(("x", "warm_up"))
+    check("unique repo-specific method name x.warm_up() -> Cache.warm_up flagged name-unique", c is not None and c.get("resolved_class") == "Cache" and c.get("resolution") == "name-unique", c)
     c = ac.get(("x", "put"))
-    check("unique method name x.put() -> Cache.put flagged name-unique", c is not None and c.get("resolved_class") == "Cache" and c.get("resolution") == "name-unique", c)
+    check("x.put() is NOT guessed from repo uniqueness (put is also a Queue/dict-style builtin method)", c is not None and not c.get("resolved_function"), c)
     c = ac.get(("x", "spin"))
     check("ambiguous x.spin() (Gear/Cache) stays unresolved", c is not None and not c.get("resolved_function"), c)
 

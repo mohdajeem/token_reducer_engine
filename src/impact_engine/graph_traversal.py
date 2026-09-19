@@ -69,6 +69,10 @@ class GraphTraversal:
                         "to": to_node,
                         "depth": depth + 1
                     }
+                    if edge.get("confidence"):
+                        edge_dict["confidence"] = edge["confidence"]  # name-unique / candidates
+                    if edge.get("is_test"):
+                        edge_dict["is_test"] = True
                     if edge_dict not in results:
                         results.append(edge_dict)
                     queue.append((from_node, depth + 1))
@@ -123,6 +127,10 @@ class GraphTraversal:
                         "to": to_node,
                         "depth": depth + 1
                     }
+                    if edge.get("confidence"):
+                        edge_dict["confidence"] = edge["confidence"]  # name-unique / candidates
+                    if edge.get("is_test"):
+                        edge_dict["is_test"] = True
                     if edge_dict not in results:
                         results.append(edge_dict)
                     queue.append((to_node, depth + 1))

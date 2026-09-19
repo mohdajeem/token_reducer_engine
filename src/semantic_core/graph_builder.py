@@ -717,6 +717,12 @@ class GraphBuilder:
 
     _BUNDLE_RE = None
 
+    def _is_bundle(self, file_path):
+        import re as _re
+        if GraphBuilder._BUNDLE_RE is None:
+            GraphBuilder._BUNDLE_RE = _re.compile(r"(^|/)(lib|dist|build|bundle|umd|esm|cjs|min)(/|$)|[.](min|esm|umd|cjs|bundle)[.][cm]?js$")
+        return bool(GraphBuilder._BUNDLE_RE.search(file_path))
+
     def _unique_owner(self, cands):
         """The single (file, class) that defines a method, or None. Built bundles that copy
         the source (lib/marked.js, lib/marked.esm.js next to src/Tokenizer.js) are the same
@@ -740,6 +746,49 @@ class GraphBuilder:
         if len(pool) == 1:
             return pool[0]
         return None
+
+    # Methods that builtin / standard types have. When a bare receiver calls one of these, the
+    # receiver may well be a dict / list / str / file / logger, so "only one class in the repo
+    # defines it" is not evidence -- the precision audit (tests/audit_precision_py.py) put the
+    # unique-name fallback at 27% on requests, almost entirely `kwargs.pop`, `x.setdefault`,
+    # `f.read`, `log.info` resolving to a vendored OrderedDict / HTTPResponse / cookie jar.
+    _BUILTIN_METHOD_NAMES = None
+
+    @classmethod
+    def builtin_method_names(cls):
+        if cls._BUILTIN_METHOD_NAMES is None:
+            names = set()
+            for t in (dict, list, str, bytes, set, frozenset, tuple, int, float, complex, object, type, BaseException):
+                names |= {n for n in dir(t) if not n.startswith("__")}
+            names |= {"read", "readline", "readlines", "write", "writelines", "close", "flush", "seek", "tell",
+                      "fileno", "truncate", "readable", "writable", "seekable", "isatty", "detach", "peek",
+                      "info", "debug", "warning", "warn", "error", "exception", "critical", "log", "setLevel",
+                      "addHandler", "removeHandler", "getLogger", "handle", "emit", "format",
+                      "get", "put", "put_nowait", "get_nowait", "join", "start", "run", "stop", "cancel",
+                      "send", "recv", "connect", "bind", "listen", "accept", "settimeout", "setblocking",
+                      "acquire", "release", "wait", "notify", "notify_all", "set", "clear", "is_set",
+                      "match", "search", "sub", "subn", "split", "findall", "finditer", "fullmatch", "groups",
+                      "group", "groupdict", "span", "compile", "escape", "encode", "decode", "next", "throw",
+                      "open", "exists", "is_file", "is_dir", "mkdir", "unlink", "resolve", "iterdir",
+                      "cursor", "execute", "executemany", "fetchone", "fetchall", "commit", "rollback",
+                      # JS: Array / String / Object / Map / Set / Promise / DOM
+                      "push", "pop", "shift", "unshift", "slice", "splice", "map", "forEach", "filter",
+                      "reduce", "reduceRight", "find", "findIndex", "some", "every", "indexOf", "lastIndexOf",
+                      "includes", "concat", "sort", "reverse", "flat", "flatMap", "fill", "keys", "values",
+                      "entries", "hasOwnProperty", "toString", "toFixed", "valueOf", "apply", "call", "bind",
+                      "then", "catch", "finally", "has", "delete", "add", "size", "at", "from", "of", "assign",
+                      "freeze", "create", "defineProperty", "getOwnPropertyNames", "isArray", "parse",
+                      "stringify", "replace", "replaceAll", "trim", "toLowerCase", "toUpperCase", "charAt",
+                      "charCodeAt", "substring", "substr", "startsWith", "endsWith", "padStart", "padEnd",
+                      "repeat", "localeCompare", "addEventListener", "removeEventListener", "dispatchEvent",
+                      "querySelector", "querySelectorAll", "getAttribute", "setAttribute", "appendChild",
+                      "removeChild", "createElement", "getBoundingClientRect", "preventDefault",
+                      "stopPropagation", "focus", "blur", "getContext", "toDataURL", "on", "off", "once",
+                      "emit", "pipe", "end", "destroy", "resume", "pause", "setTimeout", "clearTimeout",
+                      "toJSON", "toISOString", "getTime", "now", "abs", "min", "max", "floor", "ceil",
+                      "round", "sqrt", "pow", "random", "test", "exec", "length", "done"}
+            cls._BUILTIN_METHOD_NAMES = names
+        return cls._BUILTIN_METHOD_NAMES
 
     def resolve_pending_calls(self):
         """Final pass over calls that stayed unresolved: receiver types learned late (argument
@@ -808,10 +857,15 @@ class GraphBuilder:
                                                         edge_type="FUNCTION_CALL", is_test=bool(call.get("is_test")))
                                 self.graph["execution_edges"][-1]["confidence"] = "candidates"
                             continue
-                if not typed_meta and "(" not in recv and "[" not in recv:
+                if not typed_meta and "(" not in recv and "[" not in recv and func not in self.builtin_method_names():
                     # unique-name fallback also covers `this.tokenizer.space()` when the
-                    # field's type is unknown but only one class defines `space`
-                    cands = self._unique_owner(owners.get(func, set()))
+                    # field's type is unknown but only one class defines `space`; never for
+                    # names that builtin types also have (kwargs.pop is a dict, not our class).
+                    # A bundle is self-contained: calls inside lib/marked.js resolve within it.
+                    pool = owners.get(func, set())
+                    if self._is_bundle(file_path):
+                        pool = {c for c in pool if c[0] == file_path}
+                    cands = self._unique_owner(pool)
                     if cands:
                         cf, cc = cands
                         typed_meta = self.function_index.resolve_function(cf, f"{cc}.{func}")
@@ -832,17 +886,19 @@ class GraphBuilder:
                 if how == "name-unique":
                     self.graph["execution_edges"][-1]["confidence"] = "name-unique"
 
-    def resolve_method(self, file_path, class_name, method, _depth=0):
-        """(file, metadata) for class_name.method, walking the superclass chain."""
+    def resolve_method(self, file_path, class_name, method, _depth=0, _want_static=False):
+        """(file, metadata) for class_name.method, walking the superclass chain. _want_static:
+        the receiver is the class itself (`Lexer.lex(src)`), so a static method is preferred."""
         if not class_name or _depth > 8:
             return None, None
         cls_file = self.resolve_class_file(file_path, class_name) or file_path
-        meta = self.function_index.resolve_function(cls_file, f"{class_name}.{method}")
+        meta = self.function_index.resolve_static(cls_file, class_name, method, want_static=bool(_want_static)) \
+            or self.function_index.resolve_function(cls_file, f"{class_name}.{method}")
         if meta:
             return cls_file, meta
         sup = (self.graph["classes"].get(cls_file, {}).get(class_name) or {}).get("superclass")
         if sup:
-            return self.resolve_method(cls_file, sup, method, _depth + 1)
+            return self.resolve_method(cls_file, sup, method, _depth + 1, _want_static)
         return None, None
 
     # ======================================================
@@ -1166,6 +1222,8 @@ class GraphBuilder:
         }
         if owner_class:
             metadata["class"] = owner_class
+        if sm.get("function.static"):
+            metadata["static"] = True
         if getattr(sm, "is_test", False):
             metadata["is_test"] = True
 
@@ -1278,6 +1336,11 @@ class GraphBuilder:
         elif resolved_type:
             typed_file, typed_meta = self.resolve_method(sm.file_path, resolved_type, func)
             typed_class = resolved_type
+        elif isinstance(raw_object_name, str) and raw_object_name[:1].isupper() and "." not in raw_object_name \
+                and self.resolve_class_file(sm.file_path, raw_object_name):
+            # `Lexer.lex(src)`: the receiver is the class -> static method preferred
+            typed_file, typed_meta = self.resolve_method(sm.file_path, raw_object_name, func, _want_static=True)
+            typed_class = raw_object_name
         if typed_meta:
             self.ensure_file("calls", sm.file_path)
             call_id = self.build_call_id(sm)
@@ -1411,10 +1474,9 @@ class GraphBuilder:
         # FALLBACK 3 — LOCAL DEFINITION
         # ==============================================
         if not resolved_function and not obj:
-            local_function = (
-                self.function_index
-                .resolve_function(sm.file_path, func)
-            )
+            # nearest module-level definition before the call site: a bundle defines
+            # `edit$1` twice and last-wins picked the wrong one (JS precision audit)
+            local_function = self.function_index.resolve_nearest(sm.file_path, func, sm.start_point[0] + 1 if sm.start_point else None)
             if local_function:
                 resolved_file = sm.file_path
                 resolved_function = local_function

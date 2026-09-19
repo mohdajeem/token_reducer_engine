@@ -365,6 +365,17 @@ def main():
     finally:
         os.environ.pop("SEMANTIC_INDEX_TESTS", None)
 
+    # ---------- 13. completeness on every impact answer
+    ia_c = srv.mcp_impact_analysis(target="FUNCTION:src/core/engine.js:Engine.tick", direction="UPSTREAM")
+    comp = ia_c.get("completeness") or {}
+    check("impact answer carries a completeness block", comp.get("verdict") in ("complete", "partial"), list(ia_c.keys()))
+    check("ambiguous q.tick() makes Engine.tick's blast radius 'partial' with the call site listed",
+          comp.get("verdict") == "partial" and any(e["file"] == "src/typed.js" and e["caller"] == "byName" for e in comp.get("unresolved_examples", [])), comp)
+    ia_h = srv.mcp_impact_analysis(target="FUNCTION:src/util/helper.js:helper", direction="UPSTREAM")
+    check("helper (every call resolved) reports 'complete'", (ia_h.get("completeness") or {}).get("verdict") == "complete", ia_h.get("completeness"))
+    ia_l = srv.mcp_impact_analysis(target="FUNCTION:src/proto.js:p5.loadStrings", direction="UPSTREAM")
+    check("name-unique caller edge is listed as low confidence", (ia_l.get("completeness") or {}).get("low_confidence_edges", 0) >= 1, ia_l.get("completeness"))
+
     # ---------- 7. framework gating
     check("no DB_ACCESS edges in a repo without a DB framework (items.find / chart.update)",
           not any(e["type"] == "DB_ACCESS" for e in graph["execution_edges"]),

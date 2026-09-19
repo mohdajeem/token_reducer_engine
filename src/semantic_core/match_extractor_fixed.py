@@ -309,6 +309,17 @@ def _this_field_assignments(func_node, param_types):
     return out
 
 
+def _is_static_method(fnode):
+    """JS: `static m() {}`; Python: a def decorated with @staticmethod / @classmethod."""
+    if fnode.type == "method_definition":
+        return any(ch.type == "static" or _text(ch) == "static" for ch in fnode.children if not ch.is_named or ch.type == "static")
+    if fnode.type == "function_definition" and fnode.parent is not None and fnode.parent.type == "decorated_definition":
+        for ch in fnode.parent.children:
+            if ch.type == "decorator" and _text(ch).strip("@ ") in ("staticmethod", "classmethod"):
+                return True
+    return False
+
+
 def parse_reexport(export_node):
     """
     export_statement with a source -> {"source": str, "star": bool, "names": [(exported, original)]}
@@ -539,6 +550,8 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                         capture_dict["function.class"] = cls
                     if sup:
                         capture_dict["function.superclass"] = sup
+                    if fnode is not None and _is_static_method(fnode):
+                        capture_dict["function.static"] = True
                     if fnode is not None:
                         # receiver types: JSDoc `@param {Engine} e`, TS `(e: Engine)`, and
                         # `this.field = new X()` / `this.field = typedParam` in the body

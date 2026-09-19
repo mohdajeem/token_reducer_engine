@@ -377,6 +377,17 @@ def build_graph(directory):
 
     graph = builder.build(registry.all_matches)
 
+    # Opt-in type-checker sidecar (SEMANTIC_TYPE_SIDECAR=1|py|js): jedi / tsc resolve the
+    # receiver-typed calls the builder could not. Never overwrites the builder's own edges.
+    from semantic_core import type_sidecar
+    sidecar_report = {}
+    if type_sidecar.enabled(".py"):
+        sidecar_report["python"] = type_sidecar.run_python(builder, directory, is_test_path)
+    if type_sidecar.enabled(".js"):
+        sidecar_report["javascript"] = type_sidecar.run_javascript(builder, directory, is_test_path)
+    if sidecar_report:
+        graph["type_sidecar"] = sidecar_report
+
     # Build reverse symbol_index (function/class name -> [file_path, ...])
     symbol_index = {}
     functions = graph.get("functions", {})

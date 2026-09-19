@@ -205,6 +205,14 @@ def resolve_target_node(graph, target_spec, repo_root=None):
                     f"Qualify it as FUNCTION:<file>:{func_name} using one of: " + ", ".join(files[:12])
                     + (" ..." if len(files) > 12 else ""))
             if files:
+                if "." not in func_name:
+                    # one file, but several classes in it define this method (Gear.spin / Cache.spin)
+                    owners = sorted({fn.get("class") for fn in graph.get("functions", {}).get(files[0], [])
+                                     if isinstance(fn, dict) and fn.get("name") == actual_func and fn.get("class")})
+                    if len(owners) > 1:
+                        raise TargetSpecError(
+                            f"Ambiguous target {target_spec!r}: {actual_func!r} is a method of {', '.join(owners)} "
+                            f"in {files[0]}. Use FUNCTION:{files[0]}:<Class>.{actual_func}")
                 return {
                     "type": "FUNCTION",
                     "file": files[0],
@@ -246,14 +254,15 @@ def resolve_target_node(graph, target_spec, repo_root=None):
                     if cls:
                         node["class"] = cls
                     else:
-                        # a bare name that several classes in this file define: pick none,
-                        # report all
+                        # A bare name that several classes in this file define. The file was
+                        # given, so this is not fatal: the node stays class-less and matches
+                        # every same-named method in the file (node_equals ignores the class
+                        # when one side lacks it), and the ambiguity is reported on the node
+                        # so a caller can ask again with FUNCTION:<file>:<Class>.<name>.
                         owners = sorted({fn.get("class") for fn in graph["functions"][registered_file]
                                          if isinstance(fn, dict) and fn.get("name") == actual_func and fn.get("class")})
                         if len(owners) > 1:
-                            raise TargetSpecError(
-                                f"Ambiguous target {target_spec!r}: {actual_func!r} is a method of "
-                                f"{', '.join(owners)} in {registered_file}. Use FUNCTION:{file_path}:<Class>.{actual_func}")
+                            node["ambiguous_classes"] = owners
                     return node
 
             return {

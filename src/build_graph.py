@@ -127,7 +127,7 @@ def print_tree(node, indent=0):
         print_tree(child, indent + 1)
 
 
-TEST_DIR_NAMES = {"test", "tests", "__tests__", "spec", "specs", "e2e", "cypress"}
+TEST_DIR_NAMES = {"test", "tests", "__tests__", "spec", "specs", "e2e", "cypress", "testing"}
 _TEST_FILE_RE = re.compile(r"(\.|_|-)(test|spec)\.[A-Za-z]+$|^test_.*\.py$|_test\.py$")
 
 _FRAMEWORK_KEYS = {

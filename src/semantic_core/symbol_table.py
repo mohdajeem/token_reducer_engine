@@ -50,6 +50,73 @@ class SymbolTable:
             out = os.path.relpath(out, project_root).replace("\\", "/")
         return out
 
+    _PY_ROOTS_CACHE = {}
+
+    def _python_search_roots(self, abs_file):
+        """Directories a dotted module path is resolved against: the project root, src/,
+        and the directory above the file's top-level package (found by walking up while
+        __init__.py exists). Cached per directory."""
+        d = os.path.dirname(abs_file)
+        if d in self._PY_ROOTS_CACHE:
+            return self._PY_ROOTS_CACHE[d]
+        roots = []
+        project_root = getattr(self, "project_root", None)
+        cur = d
+        while os.path.isfile(os.path.join(cur, "__init__.py")):
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+        roots.append(cur)
+        if project_root:
+            for r in (project_root, os.path.join(project_root, "src"), os.path.join(project_root, "lib")):
+                if os.path.isdir(r) and r not in roots:
+                    roots.append(r)
+        self._PY_ROOTS_CACHE[d] = roots
+        return roots
+
+    def resolve_python_module(self, file_path, import_source, import_name=None):
+        """
+        Project-relative file for a Python import, or None when it is not project code
+        (stdlib, third-party). `from M import N` tries the submodule M/N first, then M.
+          from ..util import helper   -> <pkg>/util.py
+          from . import parts         -> <dir>/parts.py
+          from pkg.core import engine -> pkg/core/engine.py   (N is a submodule)
+          from pkg import boot        -> pkg/__init__.py      (N is a symbol; re-exports follow)
+        """
+        if not import_source:
+            return None
+        project_root = getattr(self, "project_root", None)
+        file_path = os.path.normpath(str(file_path)).replace("\\", "/")
+        abs_file = file_path if os.path.isabs(file_path) or not project_root else os.path.join(project_root, file_path)
+        src = import_source.strip()
+        if src.startswith("."):
+            dots = len(src) - len(src.lstrip("."))
+            rest = src[dots:]
+            base = os.path.dirname(abs_file)
+            for _ in range(dots - 1):
+                base = os.path.dirname(base)
+            bases = [base]
+            parts = [p for p in rest.split(".") if p]
+        else:
+            bases = self._python_search_roots(abs_file)
+            parts = src.split(".")
+        candidates = []
+        for b in bases:
+            if import_name:
+                candidates.append(os.path.join(b, *parts, import_name + ".py"))
+                candidates.append(os.path.join(b, *parts, import_name, "__init__.py"))
+            if parts:
+                candidates.append(os.path.join(b, *parts) + ".py")
+                candidates.append(os.path.join(b, *parts, "__init__.py"))
+        for cand in candidates:
+            if os.path.isfile(cand):
+                out = os.path.normpath(cand).replace("\\", "/")
+                if project_root and os.path.isabs(out):
+                    out = os.path.relpath(out, project_root).replace("\\", "/")
+                return out
+        return None
+
     def resolve_imported_name(self, file_path, local_name):
         """The exported name behind a local import alias (h -> helper), or None."""
         file_path = os.path.normpath(str(file_path)).replace("\\", "/")
@@ -85,7 +152,24 @@ class SymbolTable:
             )
         ).replace("\\",'/')
 
-        if file_path.endswith(".java"):
+        if file_path.endswith(".py"):
+            if import_name is None and import_source and not import_source.startswith("."):
+                # `import pytest` / `import a.b.c`: the local names are `pytest`, and both
+                # `a` (the package) and `a.b.c` (the module, as written at call sites)
+                top = import_source.split(".")[0]
+                if "." in import_source:
+                    top_file = self.resolve_python_module(file_path, top)
+                    self.imports[file_path][top] = top_file
+                import_name = import_source
+            resolved = self.resolve_python_module(file_path, import_source, exported_name)
+            if resolved is None:
+                # stdlib / third-party: remember nothing resolvable; callers see "external"
+                self.imports[file_path][import_name] = None
+                if exported_name and exported_name != import_name:
+                    self.imported_names.setdefault(file_path, {})[import_name] = exported_name
+                return None
+            normalized = resolved
+        elif file_path.endswith(".java"):
             # Java import: com.example.service.UserService
             import_source_parts = import_source.split(".")
             import_class = import_source_parts[-1]
@@ -119,8 +203,12 @@ class SymbolTable:
         else:
             resolved = self.resolve_module_path(file_path, import_source)
             if resolved is None:
-                # bare package import: keep the historical shape so callers see a string
-                resolved = normalized + (".ts" if file_path.endswith((".ts", ".tsx")) else ".js")
+                # bare package import: keep the historical shape in the table so callers
+                # see a string, but report None so the graph marks the import external
+                self.imports[file_path][import_name] = normalized + (".ts" if file_path.endswith((".ts", ".tsx")) else ".js")
+                if exported_name and exported_name != import_name:
+                    self.imported_names.setdefault(file_path, {})[import_name] = exported_name
+                return None
             normalized = resolved
 
         if project_root and os.path.isabs(normalized):
@@ -131,6 +219,7 @@ class SymbolTable:
         ] = normalized
         if exported_name and exported_name != import_name:
             self.imported_names.setdefault(file_path, {})[import_name] = exported_name
+        return normalized
     # ======================================================
     # RESOLVE SYMBOL
     # ======================================================

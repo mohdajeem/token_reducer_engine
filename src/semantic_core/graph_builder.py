@@ -227,6 +227,11 @@ class GraphBuilder:
 
                 self.handle_call_arguments(sm)
 
+        # Python classes (CONTRACT matches) become class nodes before calls are resolved
+        for sm in semantic_matches:
+            if sm.match_type == "CONTRACT" and sm.file_path.endswith(".py"):
+                self.handle_contract(sm)
+
         # ======================================================
         # PASS 4b — CALLABLE VALUES
         # ======================================================
@@ -556,7 +561,7 @@ class GraphBuilder:
             sm.file_path
         )
 
-        self.symbol_table.register_import(
+        resolved_file = self.symbol_table.register_import(
             file_path=sm.file_path,
             import_name=(
                 sm.get("import.alias")
@@ -584,8 +589,18 @@ class GraphBuilder:
 
             "alias": sm.get(
                 "import.alias"
-            )
+            ),
+
+            # project file this import reaches, None for stdlib / third-party
+            "file": resolved_file if isinstance(resolved_file, str) else None,
         })
+
+        # A Python package `__init__.py` that imports a name re-exports it:
+        # `from .core.engine import boot` makes `from pkg import boot` reach engine.py.
+        if sm.file_path.endswith("__init__.py") and resolved_file and sm.get("import.name"):
+            entry = self.graph["reexports"].setdefault(sm.file_path, {"star": [], "names": {}})
+            local = sm.get("import.alias") or sm.get("import.name")
+            entry["names"][local] = [resolved_file, sm.get("import.name")]
 
     def handle_reexport(self, sm):
         """`export * from './core'` / `export { a as b } from './x'` recorded per file so call
@@ -740,13 +755,14 @@ class GraphBuilder:
                     continue
                 owners.setdefault(fn["name"], set()).add((file, fn["class"]))
         for file_path, calls in self.graph["calls"].items():
-            # local aliases of bare package imports: `import * as R from 'ramda'`, `const fs = require('fs')`
+            # local aliases of imports that reach NO project file: `import * as R from 'ramda'`,
+            # `const fs = require('fs')`, `import json`, `from os import path`
             external = {}
             for imp in self.graph["imports"].get(file_path, []):
                 src = imp.get("source") or ""
-                alias = imp.get("alias") or imp.get("name")
-                if alias and src and not src.startswith((".", "/")):
-                    external[alias] = src
+                alias = imp.get("alias") or imp.get("name") or (src.split(".")[0] if src and not src.startswith(".") else None)
+                if alias and src and imp.get("file") is None:
+                    external[alias] = src.split("/")[0]
             for call in calls:
                 if call.get("resolved_function"):
                     continue
@@ -1233,14 +1249,29 @@ class GraphBuilder:
         # `const e = new Engine()` -> Engine.start via the registered variable type.
         typed_file = typed_meta = typed_class = None
         field_type = None
-        if isinstance(raw_object_name, str) and raw_object_name.startswith("this.") and getattr(sm, "owner_class", None):
-            field_type = self.resolve_field_type(sm.file_path, sm.owner_class, raw_object_name[5:])
+        if not raw_object_name and func == "cls" and getattr(sm, "owner_class", None):
+            cls_file = self.resolve_class_file(sm.file_path, sm.owner_class) or sm.file_path
+            cmeta = self.function_index.resolve_function(cls_file, sm.owner_class)
+            if cmeta:
+                self.ensure_file("calls", sm.file_path)
+                self.graph["calls"][sm.file_path].append({
+                    "call_id": self.build_call_id(sm), "object": None, "receiver": None, "function": "cls",
+                    "resolved_file": cls_file, "resolved_function": cmeta, "resolved_class": sm.owner_class,
+                    "resolution": "typed", "caller_function": sm.owner_function,
+                })
+                self.add_execution_edge(from_node=self._from_node(sm),
+                                        to_node={"type": "FUNCTION", "file": cls_file, "function": sm.owner_class},
+                                        edge_type="FUNCTION_CALL", is_test=getattr(sm, "is_test", False))
+                return
+        if isinstance(raw_object_name, str) and raw_object_name.startswith(("this.", "self.")) and getattr(sm, "owner_class", None):
+            field_type = self.resolve_field_type(sm.file_path, sm.owner_class, raw_object_name.split(".", 1)[1])
         if field_type:
             typed_file, typed_meta = self.resolve_method(sm.file_path, field_type, func)
             typed_class = field_type
-        elif raw_object_name in ("this", "self", "super") and getattr(sm, "owner_class", None):
+        elif (raw_object_name in ("this", "self", "cls", "super") or (isinstance(raw_object_name, str) and raw_object_name.startswith("super("))) \
+                and getattr(sm, "owner_class", None):
             cls = sm.owner_class
-            if raw_object_name == "super":
+            if raw_object_name == "super" or raw_object_name.startswith("super("):
                 cls = (self.graph["classes"].get(sm.file_path, {}).get(cls) or {}).get("superclass")
             typed_file, typed_meta = self.resolve_method(sm.file_path, cls, func)
             typed_class = cls
@@ -1612,6 +1643,23 @@ class GraphBuilder:
     # ======================================================
 
     def handle_contract(self, sm):
+
+        if sm.file_path.endswith(".py"):
+            # python.scm captures `class X:` as contract.name. Register X as a class node
+            # (kind="class") so `X(...)` resolves like any imported name, and so the
+            # classes registry knows X even when it has no methods.
+            name = sm.get("contract.name")
+            if name:
+                self.graph["classes"].setdefault(sm.file_path, {}).setdefault(name, {"superclass": None})
+                if not self.function_index.resolve_function(sm.file_path, name):
+                    self.ensure_file("functions", sm.file_path)
+                    metadata = {"name": name, "file": sm.file_path, "start_line": sm.start_point[0] + 1,
+                                "end_line": sm.end_point[0] + 1, "kind": "class"}
+                    if getattr(sm, "is_test", False):
+                        metadata["is_test"] = True
+                    self.function_index.register_function(file_path=sm.file_path, function_name=name, metadata=metadata)
+                    self.graph["functions"][sm.file_path].append(dict(metadata))
+            return
 
         self.ensure_file(
             "contracts",

@@ -96,6 +96,22 @@ def find_owner_class(func_node):
             break
         if par.type == "class_body" and par.parent is not None and par.parent.type in _CLASS_NODE_TYPES:
             return _class_name_of(par.parent), _superclass_of(par.parent)
+        # Python: function_definition [-> decorated_definition] -> block -> class_definition
+        if par.type == "block" and par.parent is not None and par.parent.type == "class_definition":
+            cls = par.parent
+            name = cls.child_by_field_name("name")
+            sup = None
+            bases = cls.child_by_field_name("superclasses")
+            if bases is not None:
+                for ch in bases.named_children:
+                    if ch.type in ("identifier", "attribute"):
+                        sup = _text(ch).split(".")[-1]
+                        break
+            return (_text(name) if name is not None else None), sup
+        if par.type == "decorated_definition":
+            node = par
+            depth += 1
+            continue
         if par.type in _CLASS_NODE_TYPES:
             return _class_name_of(par), _superclass_of(par)
         if par.type == "object":
@@ -117,7 +133,7 @@ def find_owner_class(func_node):
                     return owner, None
         if par.type in ("program", "module"):
             break
-        if par.type in ("function_declaration", "function_expression", "arrow_function", "method_definition"):
+        if par.type in ("function_declaration", "function_expression", "arrow_function", "method_definition", "function_definition"):
             # nested inside another function: no class ownership of its own
             return None, None
         node = par
@@ -162,10 +178,35 @@ def _jsdoc_param_types(comment):
     return out
 
 
+_TYPE_NAME_RE = _re.compile(r"[A-Z][A-Za-z0-9_]*")
+
+
+def _py_annotation_type(type_node):
+    """`Gear`, `"parts.Gear"`, `Optional[Gear]`, `list[Gear]` -> "Gear" (first class-like name)."""
+    txt = _text(type_node).strip().strip("'\"")
+    for m in _TYPE_NAME_RE.finditer(txt):
+        name = m.group(0)
+        if name.lower() not in _PRIMITIVES and name not in ("Optional", "Union", "List", "Dict", "Tuple", "Set", "Any",
+                                                               "Callable", "Iterable", "Iterator", "Sequence", "Mapping", "Type"):
+            return name
+    return None
+
+
 def _ts_param_types(func_node):
-    """`(svc: Engine, n: number)` -> {"svc": "Engine"} from TS type annotations."""
+    """`(svc: Engine, n: number)` -> {"svc": "Engine"} from TS type annotations; Python
+    `(gear: Gear, n: int = 0)` -> {"gear": "Gear"} from annotations."""
     out = {}
     params = func_node.child_by_field_name("parameters")
+    if params is not None and params.type == "parameters":  # Python
+        for prm in params.named_children:
+            if prm.type in ("typed_parameter", "typed_default_parameter"):
+                ann = prm.child_by_field_name("type")
+                ident = prm.child_by_field_name("name") if prm.type == "typed_default_parameter" else next((c for c in prm.named_children if c.type == "identifier"), None)
+                if ann is not None and ident is not None:
+                    t = _py_annotation_type(ann)
+                    if t:
+                        out[_text(ident)] = t
+        return out
     if params is None:
         for ch in func_node.children:
             if ch.type == "formal_parameters":
@@ -214,6 +255,13 @@ def _first_new_expression(node, depth=0):
     if node.type == "new_expression":
         ctor = node.child_by_field_name("constructor")
         return _text(ctor).split(".")[-1] if ctor is not None else None
+    if node.type == "call":  # Python: `parts.Cache()` -- a capitalised callee is a constructor
+        fn = node.child_by_field_name("function")
+        if fn is not None:
+            name = _text(fn).split(".")[-1]
+            if name[:1].isupper():
+                return name
+        return None
     if node.type in ("arrow_function", "function_expression", "call_expression"):
         return None
     for ch in node.named_children:
@@ -232,13 +280,13 @@ def _this_field_assignments(func_node, param_types):
     stack = [body]
     while stack:
         node = stack.pop()
-        if node.type == "assignment_expression":
+        if node.type in ("assignment_expression", "assignment"):
             left = node.child_by_field_name("left")
             right = node.child_by_field_name("right")
-            if left is not None and right is not None and left.type == "member_expression":
+            if left is not None and right is not None and left.type in ("member_expression", "attribute"):
                 obj = left.child_by_field_name("object")
-                prop = left.child_by_field_name("property")
-                if obj is not None and prop is not None and _text(obj) == "this":
+                prop = left.child_by_field_name("property") or left.child_by_field_name("attribute")
+                if obj is not None and prop is not None and _text(obj) in ("this", "self"):
                     field = _text(prop)
                     if right.type == "identifier" and _text(right) in param_types:
                         out[field] = param_types[_text(right)]
@@ -255,7 +303,7 @@ def _this_field_assignments(func_node, param_types):
                         if ctor:
                             out[field] = ctor
         # do not descend into nested functions/classes: their `this` is a different object
-        if node.type in ("function_expression", "function_declaration", "class_body") and node is not body:
+        if node.type in ("function_expression", "function_declaration", "class_body", "function_definition", "class_definition") and node is not body:
             continue
         stack.extend(node.children)
     return out

@@ -234,14 +234,15 @@
     ])
 ) @function.node
 
-; standard parameters: (req, res)
-(formal_parameters (identifier) @param.name)
+; standard & default parameters
+(formal_parameters [ (required_parameter pattern: (identifier) @param.name) (optional_parameter pattern: (identifier) @param.name) ])
+
 
 ; default parameters: (req = {})
-(formal_parameters (assignment_pattern left: (identifier) @param.name))
+
 
 ; rest parameters: (...args)
-(formal_parameters (rest_pattern (identifier) @param.rest))
+(formal_parameters (required_parameter pattern: (rest_pattern (identifier) @param.rest)))
 
 ; destructured parameters: ({ name, email: userEmail, ...rest }, res)
 (object_pattern (shorthand_property_identifier_pattern) @param.destructure_prop)
@@ -327,8 +328,8 @@
 (export_statement
   declaration: [
     (function_declaration name: (identifier) @export.name)
-    (class_declaration name: (identifier) @export.name)
-    (variable_declaration (variable_declarator name: (identifier) @export.name))
+    (class_declaration name: (type_identifier) @export.name)
+    (lexical_declaration (variable_declarator name: (identifier) @export.name))
   ]
 )
 

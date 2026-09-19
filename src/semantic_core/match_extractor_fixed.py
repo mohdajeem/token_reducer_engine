@@ -14,6 +14,269 @@ from language_config import LanguageManager
 from semantic_core.semantic_match import SemanticMatch
 from semantic_core.match_classifier import classify_match
 from tree_sitter import QueryCursor
+from config.debug_flags import DEBUG_GRAPH_BUILD
+from utils.logger import logger
+
+
+_CLASS_NODE_TYPES = {"class_declaration", "class", "class_expression", "abstract_class_declaration"}
+_NOT_A_CLASS = {"module", "exports", "window", "global", "globalThis", "self", "this", "document", "process", "console"}
+
+
+def _text(node):
+    try:
+        return node.text.decode("utf-8") if isinstance(node.text, bytes) else str(node.text)
+    except Exception:
+        return ""
+
+
+def _prototype_owner(member_node):
+    """`X.prototype` member_expression -> 'X' (or 'A.B' for `A.B.prototype`), else None."""
+    if member_node is None or member_node.type != "member_expression":
+        return None
+    prop = member_node.child_by_field_name("property")
+    obj = member_node.child_by_field_name("object")
+    if prop is not None and _text(prop) == "prototype" and obj is not None:
+        # `p5.RendererGL.prototype.x` -> class RendererGL: the namespace prefix is dropped so
+        # the class name matches what `new p5.RendererGL()` / `@param {p5.RendererGL}` yield
+        return _text(obj).split(".")[-1]
+    return None
+
+
+def _class_name_of(class_node):
+    name = class_node.child_by_field_name("name")
+    if name is not None:
+        return _text(name)
+    # `const Foo = class { ... }` -- class_expression named by the declarator
+    par = class_node.parent
+    if par is not None and par.type == "variable_declarator":
+        n = par.child_by_field_name("name")
+        return _text(n) if n is not None else None
+    return None
+
+
+def _superclass_of(class_node):
+    for ch in class_node.children:
+        if ch.type == "class_heritage":
+            for sub in ch.children:
+                if sub.type in ("identifier", "member_expression", "type_identifier"):
+                    return _text(sub)
+            # TS: `extends X` sits inside an extends_clause
+            for sub in ch.named_children:
+                for leaf in (sub.named_children or [sub]):
+                    if leaf.type in ("identifier", "member_expression", "type_identifier"):
+                        return _text(leaf)
+    return None
+
+
+def find_owner_class(func_node):
+    """
+    The class that owns a function definition node, recovered from the AST:
+      class X { m() {} }                          -> ('X', superclass)
+      X.prototype.m = function () {}             -> ('X', None)
+      Object.assign(X.prototype, { m() {} })     -> ('X', None)
+      X.prototype = { m: function () {} }        -> ('X', None)
+    Returns (class_name, superclass) or (None, None) for module-level functions.
+    """
+    node = func_node
+    # the prototype-assignment capture IS the assignment_expression
+    if node is not None and node.type == "assignment_expression":
+        left = node.child_by_field_name("left")
+        if left is not None and left.type == "member_expression":
+            owner = _prototype_owner(left.child_by_field_name("object"))
+            if owner:
+                return owner, None
+            # `p5.foo = function () {}` -- a static member of namespace/class p5
+            obj = left.child_by_field_name("object")
+            if obj is not None and obj.type == "identifier" and _text(obj) not in _NOT_A_CLASS:
+                return _text(obj), None
+    depth = 0
+    while node is not None and depth < 12:
+        par = node.parent
+        if par is None:
+            break
+        if par.type == "class_body" and par.parent is not None and par.parent.type in _CLASS_NODE_TYPES:
+            return _class_name_of(par.parent), _superclass_of(par.parent)
+        if par.type in _CLASS_NODE_TYPES:
+            return _class_name_of(par), _superclass_of(par)
+        if par.type == "object":
+            gp = par.parent
+            # Object.assign(X.prototype, { ... })
+            if gp is not None and gp.type == "arguments" and gp.parent is not None and gp.parent.type == "call_expression":
+                call = gp.parent
+                fn = call.child_by_field_name("function")
+                if fn is not None and _text(fn) in ("Object.assign", "_.extend", "extend", "$.extend"):
+                    args = list(gp.named_children)
+                    if args:
+                        owner = _prototype_owner(args[0])
+                        if owner:
+                            return owner, None
+            # X.prototype = { ... }
+            if gp is not None and gp.type == "assignment_expression":
+                owner = _prototype_owner(gp.child_by_field_name("left"))
+                if owner:
+                    return owner, None
+        if par.type in ("program", "module"):
+            break
+        if par.type in ("function_declaration", "function_expression", "arrow_function", "method_definition"):
+            # nested inside another function: no class ownership of its own
+            return None, None
+        node = par
+        depth += 1
+    return None, None
+
+
+import re as _re
+
+_JSDOC_PARAM_RE = _re.compile(r"@param\s*\{\s*([?!]?)([A-Za-z_$][\w$.]*)(?:<[^}]*>)?(\[\])?\s*[=]?\s*\}\s*\[?([A-Za-z_$][\w$]*)")
+_STATEMENT_WRAPPERS = {"export_statement", "lexical_declaration", "variable_declaration", "expression_statement",
+                       "assignment_expression", "variable_declarator", "pair", "public_field_definition"}
+_PRIMITIVES = {"number", "string", "boolean", "object", "function", "any", "void", "null", "undefined",
+               "array", "promise", "symbol", "bigint", "never", "unknown", "date", "regexp", "error", "element"}
+
+
+def _doc_comment_before(func_node):
+    """The `/** ... */` comment attached to a function: the previous sibling of the
+    statement that wraps it (export / const / expression / class member)."""
+    node = func_node
+    for _ in range(4):
+        par = node.parent
+        if par is not None and par.type in _STATEMENT_WRAPPERS:
+            node = par
+        else:
+            break
+    prev = node.prev_named_sibling
+    if prev is not None and prev.type == "comment":
+        txt = _text(prev)
+        if txt.startswith("/**"):
+            return txt
+    return None
+
+
+def _jsdoc_param_types(comment):
+    out = {}
+    for m in _JSDOC_PARAM_RE.finditer(comment or ""):
+        typ, is_array, name = m.group(2), m.group(3), m.group(4)
+        if is_array or typ.lower() in _PRIMITIVES:
+            continue
+        out[name] = typ.split(".")[-1]
+    return out
+
+
+def _ts_param_types(func_node):
+    """`(svc: Engine, n: number)` -> {"svc": "Engine"} from TS type annotations."""
+    out = {}
+    params = func_node.child_by_field_name("parameters")
+    if params is None:
+        for ch in func_node.children:
+            if ch.type == "formal_parameters":
+                params = ch
+                break
+    if params is None:
+        return out
+    for prm in params.named_children:
+        if prm.type not in ("required_parameter", "optional_parameter"):
+            continue
+        pat = prm.child_by_field_name("pattern")
+        ann = prm.child_by_field_name("type")
+        if pat is None or ann is None or pat.type != "identifier":
+            continue
+        for t in ann.named_children:
+            if t.type == "type_identifier":
+                name = _text(t)
+                if name.lower() not in _PRIMITIVES:
+                    out[_text(pat)] = name
+            elif t.type == "generic_type":
+                base = t.child_by_field_name("name") or (t.named_children[0] if t.named_children else None)
+                if base is not None and _text(base).lower() not in _PRIMITIVES:
+                    out[_text(pat)] = _text(base)
+    return out
+
+
+def _function_body(func_node):
+    if func_node.type == "assignment_expression":
+        right = func_node.child_by_field_name("right")
+        return right.child_by_field_name("body") if right is not None else None
+    if func_node.type in ("variable_declarator", "pair"):
+        val = func_node.child_by_field_name("value")
+        return val.child_by_field_name("body") if val is not None else None
+    if func_node.type == "call_expression":  # test callback
+        return None
+    return func_node.child_by_field_name("body")
+
+
+def _first_new_expression(node, depth=0):
+    """Constructor name of the first `new X(...)` in an expression subtree (shallow)."""
+    if node is None or depth > 4:
+        return None
+    if node.type == "new_expression":
+        ctor = node.child_by_field_name("constructor")
+        return _text(ctor).split(".")[-1] if ctor is not None else None
+    if node.type in ("arrow_function", "function_expression", "call_expression"):
+        return None
+    for ch in node.named_children:
+        r = _first_new_expression(ch, depth + 1)
+        if r:
+            return r
+    return None
+
+
+def _this_field_assignments(func_node, param_types):
+    """`this.x = new Y()` -> {"x": "Y"}; `this.x = param` -> param's declared type, if any."""
+    out = {}
+    body = _function_body(func_node)
+    if body is None:
+        return out
+    stack = [body]
+    while stack:
+        node = stack.pop()
+        if node.type == "assignment_expression":
+            left = node.child_by_field_name("left")
+            right = node.child_by_field_name("right")
+            if left is not None and right is not None and left.type == "member_expression":
+                obj = left.child_by_field_name("object")
+                prop = left.child_by_field_name("property")
+                if obj is not None and prop is not None and _text(obj) == "this":
+                    field = _text(prop)
+                    if right.type == "identifier" and _text(right) in param_types:
+                        out[field] = param_types[_text(right)]
+                    else:
+                        # `new X()` directly, or inside `a || new X()` / `cond ? new X() : y`
+                        ctor = _first_new_expression(right)
+                        if ctor:
+                            out[field] = ctor
+        # do not descend into nested functions/classes: their `this` is a different object
+        if node.type in ("function_expression", "function_declaration", "class_body") and node is not body:
+            continue
+        stack.extend(node.children)
+    return out
+
+
+def parse_reexport(export_node):
+    """
+    export_statement with a source -> {"source": str, "star": bool, "names": [(exported, original)]}
+      export * from './core'            -> star
+      export { a, b as c } from './x'   -> names [(a, a), (c, b)]
+    """
+    if export_node is None or export_node.type != "export_statement":
+        return None
+    src = export_node.child_by_field_name("source")
+    if src is None:
+        return None
+    source = _text(src).strip("'\"`")
+    star = any(ch.type == "*" for ch in export_node.children)
+    names = []
+    for ch in export_node.named_children:
+        if ch.type == "export_clause":
+            for spec in ch.named_children:
+                if spec.type != "export_specifier":
+                    continue
+                name = spec.child_by_field_name("name")
+                alias = spec.child_by_field_name("alias")
+                if name is not None:
+                    names.append((_text(alias) if alias is not None else _text(name), _text(name)))
+        elif ch.type == "namespace_export":
+            star = True
+    return {"source": source, "star": bool(star and not names), "names": names}
 
 def normalize_route_arguments(nodes, served_method_node=None):
     call_node = None
@@ -167,7 +430,7 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                         capture_dict.get("call.end", identity_node.end_byte)
                     )
                     if call_key in seen_calls:
-                        print(f"⚠️ [DEDUPLICATE CALL] Dropped duplicate CALL match for {capture_dict.get('call.func_name')} at range {call_key}")
+                        logger.debug("[DEDUPLICATE CALL] dropped duplicate CALL match for %s at %s", capture_dict.get("call.func_name"), call_key)
                         continue
                     seen_calls.add(call_key)
 
@@ -196,9 +459,46 @@ def safe_extract_semantic_matches(matches, file_path, tree):
 
                 #print("CAPTURE_DICT\n:",capture_dict)
 
-                if match_type in {"CALL", "CALL_ARGUMENTS", "RETURN_VALUE", "FUNCTION_PARAMS"}:
+                if DEBUG_GRAPH_BUILD and match_type in {"CALL", "CALL_ARGUMENTS", "RETURN_VALUE", "FUNCTION_PARAMS"}:
                     from pathlib import Path
                     print(f"🔍 [EXTRACTED {match_type}] File: {Path(file_path).name}, Range: {identity_node.start_byte}-{identity_node.end_byte}, captures: {capture_dict}")
+
+                if match_type == "REEXPORT":
+                    rnode = match_dict.get("reexport.node")
+                    rnode = rnode[0] if isinstance(rnode, list) else rnode
+                    rx = parse_reexport(rnode)
+                    if not rx:
+                        continue
+                    capture_dict["reexport.source"] = rx["source"]
+                    capture_dict["reexport.star"] = rx["star"]
+                    capture_dict["reexport.names"] = rx["names"]
+
+                if match_type == "FUNCTION_DEF":
+                    fnode = match_dict.get("function.node")
+                    fnode = fnode[0] if isinstance(fnode, list) else fnode
+                    cls, sup = find_owner_class(fnode) if fnode is not None else (None, None)
+                    if cls:
+                        capture_dict["function.class"] = cls
+                    if sup:
+                        capture_dict["function.superclass"] = sup
+                    if fnode is not None:
+                        # receiver types: JSDoc `@param {Engine} e`, TS `(e: Engine)`, and
+                        # `this.field = new X()` / `this.field = typedParam` in the body
+                        ptypes = {}
+                        doc = _doc_comment_before(fnode)
+                        if doc:
+                            ptypes.update(_jsdoc_param_types(doc))
+                        try:
+                            ptypes.update(_ts_param_types(fnode if fnode.type not in ("assignment_expression", "variable_declarator", "pair")
+                                                          else (fnode.child_by_field_name("right") or fnode.child_by_field_name("value") or fnode)))
+                        except Exception:
+                            pass
+                        if ptypes:
+                            capture_dict["function.param_types"] = ptypes
+                        if cls:
+                            ftypes = _this_field_assignments(fnode, ptypes)
+                            if ftypes:
+                                capture_dict["function.field_types"] = ftypes
 
                 semantic_match = SemanticMatch(
                     match_type=match_type,
@@ -229,27 +529,42 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                 if func_name:
                     function_scopes.append({
                         "name": func_name,
+                        "class": sm.captures.get("function.class"),
                         "start": sm.start_byte,
-                        "end": sm.end_byte
+                        "end": sm.end_byte,
+                        # The SPECIFIC occurrence's own start_line -- two same-named
+                        # methods (different classes, same or different files) have
+                        # different byte ranges here even though "name" collides, so
+                        # this is what lets a caller downstream tell them apart instead
+                        # of collapsing to the ambiguous bare name alone.
+                        "start_line": (sm.start_point[0] + 1) if sm.start_point else None
                     })
-        
-        # Sort by start byte so inner functions come first if we want, 
+
+        # Sort by start byte so inner functions come first if we want,
         # but usually we want the most immediate parent.
         # Actually, for nested functions, the smallest range that contains the match is the right one.
         for sm in semantic_matches:
             if sm.match_type != "FUNCTION_DEF":
                 best_fit = None
+                best_fit_line = None
+                best_fit_class = None
                 best_size = float('inf')
-                
+
                 for scope in function_scopes:
                     if scope["start"] <= sm.start_byte and sm.end_byte <= scope["end"]:
                         size = scope["end"] - scope["start"]
                         if size < best_size:
                             best_size = size
                             best_fit = scope["name"]
-                
+                            best_fit_line = scope["start_line"]
+                            best_fit_class = scope.get("class")
+
                 if best_fit:
                     sm.owner_function = best_fit
+                    sm.owner_function_line = best_fit_line
+                    sm.owner_class = best_fit_class
+            else:
+                sm.owner_class = sm.captures.get("function.class")
 
         return semantic_matches
         

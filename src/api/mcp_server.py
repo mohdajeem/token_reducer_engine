@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import contextlib
+import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Literal
 
@@ -13,10 +14,14 @@ from mcp.server.fastmcp import FastMCP
 from build_graph import build_graph
 from impact_engine import GraphTraversal, TraversalPolicy, PolicyTraversalEngine
 from context_engine import ContextExtractor
-from main import resolve_target_node
+from main import resolve_target_node, TargetSpecError
+import re
 from incremental_runtime.snapshot_manager import SnapshotManager
 from telemetry.live_telemetry import live_telemetry_manager
 from telemetry.task_window_analyzer import TaskWindowAnalyzer
+from incremental_runtime.incremental_graph_manager import IncrementalGraphManager
+from incremental_runtime.graph_watcher import GraphWatcher
+from semantic_core.graph_builder import GraphBuilder
 
 # ==========================================================
 # STDOUT REDIRECTION TO PREVENT STREAM CORRUPTION
@@ -40,15 +45,17 @@ mcp = FastMCP("Semantic Context Engine")
 
 SERVER_STATE = {
     "repo_path": None,
-    "graph": None
+    "graph": None,
+    "lock": threading.Lock(),
+    "watcher": None
 }
+
 
 # ==========================================================
 # MCP TOOLS
 # ==========================================================
-
 @mcp.tool()
-def mcp_build_graph(repo_path: str, force_rebuild: bool = False) -> str:
+def mcp_build_graph(repo_path: str, force_rebuild: bool = False, watch: bool = False, cache_subdir: str = "") -> str:
     """
     Builds or updates the semantic context graph for a repository.
     Loads cached index if available to optimize start latency.
@@ -56,59 +63,152 @@ def mcp_build_graph(repo_path: str, force_rebuild: bool = False) -> str:
     Args:
         repo_path: Absolute path to the repository root directory.
         force_rebuild: If True, forces a full rebuild and bypasses the cache.
+        watch: If True, starts a background filesystem watcher to track changes in real-time (off by default; batch/agent use builds once per checkout).
+        cache_subdir: Subdirectory under .semantic_cache to isolate different versions of the graph.
     """
     repo_path = os.path.abspath(repo_path)
     if not os.path.isdir(repo_path):
         return f"Error: Repository path '{repo_path}' is not a valid directory."
         
-    SERVER_STATE["repo_path"] = repo_path
-    cache_dir = os.path.join(repo_path, ".semantic_cache")
-    snapshot_mgr = SnapshotManager(snapshot_dir=cache_dir)
-    
-    # Check cache first
-    if not force_rebuild:
-        try:
-            with redirect_stdout_to_stderr():
-                cached_graph = snapshot_mgr.load_snapshot("graph")
-            if cached_graph:
-                SERVER_STATE["graph"] = cached_graph
-                # Compute metrics
-                funcs = sum(len(v) for v in cached_graph.get("functions", {}).values())
-                routes = sum(len(v) for v in cached_graph.get("routes", {}).values())
-                edges = len(cached_graph.get("execution_edges", []))
-                return (
-                    f"Successfully loaded cached graph from .semantic_cache/graph.json!\n"
-                    f"Metrics:\n"
-                    f"  - Functions: {funcs}\n"
-                    f"  - Routes: {routes}\n"
-                    f"  - Execution Edges: {edges}"
-                )
-        except Exception as e:
-            print(f"Failed to load cached graph: {e}", file=sys.stderr)
-            
-    # Compile graph
-    try:
-        print(f"Building semantic graph for: {repo_path}...", file=sys.stderr)
-        with redirect_stdout_to_stderr():
-            graph = build_graph(repo_path)
-            # Save cache
-            snapshot_mgr.save_snapshot(graph, "graph")
-            
-        SERVER_STATE["graph"] = graph
+    with SERVER_STATE["lock"]:
+        # Stop existing watcher if active
+        if SERVER_STATE.get("watcher"):
+            try:
+                SERVER_STATE["watcher"].stop()
+            except Exception as ex:
+                print(f"Failed to stop watcher: {ex}", file=sys.stderr)
+            SERVER_STATE["watcher"] = None
+
+        SERVER_STATE["repo_path"] = repo_path
         
+        # Build isolated cache directory if requested
+        if cache_subdir:
+            cache_dir = os.path.join(repo_path, ".semantic_cache", cache_subdir)
+        else:
+            cache_dir = os.path.join(repo_path, ".semantic_cache")
+            
+        snapshot_mgr = SnapshotManager(snapshot_dir=cache_dir)
+        
+        # Check cache first
+        from incremental_runtime.change_detector import ChangeDetector
+        change_detector = ChangeDetector()
+
+        graph = None
+        loaded_from_cache = False
+        rebuild_incrementally = False
+        changed_files = []
+
+        if not force_rebuild:
+            try:
+                with redirect_stdout_to_stderr():
+                    cached_graph = snapshot_mgr.load_snapshot("graph")
+                if cached_graph:
+                    changed_files = change_detector.get_changed_files(repo_path)
+                    if changed_files:
+                        rebuild_incrementally = True
+                        print(f"Incrementally updating {len(changed_files)} changed files for: {repo_path}...", file=sys.stderr)
+                        with redirect_stdout_to_stderr():
+                            from incremental_runtime.graph_invalidator import GraphInvalidator
+                            from language_config import LANG_CONFIG
+                            from tree_sitter import Parser, Query, QueryCursor
+                            from semantic_core.match_extractor_fixed import safe_extract_semantic_matches
+
+                            invalidator = GraphInvalidator()
+                            builder = GraphBuilder()
+                            builder.graph = cached_graph
+
+                            for rel_p in changed_files:
+                                abs_p = os.path.join(repo_path, rel_p)
+                                if os.path.exists(abs_p):
+                                    invalidator.invalidate_file(cached_graph, rel_p)
+                                    ext = os.path.splitext(abs_p)[1]
+                                    if ext in LANG_CONFIG:
+                                        lang = LANG_CONFIG[ext]["LANGUAGE"]
+                                        parser = Parser(lang)
+                                        with open(abs_p, "r", encoding="utf-8", errors="ignore") as f:
+                                            code = f.read()
+                                        tree = parser.parse(bytes(code, "utf-8"))
+                                        from build_graph import _compiled_query
+                                        query = _compiled_query(ext)
+                                        raw_matches = QueryCursor(query).matches(tree.root_node)
+                                        matches = safe_extract_semantic_matches(raw_matches, rel_p, tree)
+                                        builder.build_file(rel_p, matches)
+
+                            builder.build_argument_parameter_flow()
+                            builder.detect_taint_sources()
+                            graph = builder.graph
+                            snapshot_mgr.save_snapshot(graph, "graph")
+                    else:
+                        graph = cached_graph
+                        loaded_from_cache = True
+            except Exception as e:
+                print(f"Failed to load cached graph: {e}", file=sys.stderr)
+
+        if graph is None:
+            # Compile graph
+            try:
+                print(f"Building semantic graph for: {repo_path}...", file=sys.stderr)
+                with redirect_stdout_to_stderr():
+                    graph = build_graph(repo_path)
+                    # Save cache and initial hashes
+                    snapshot_mgr.save_snapshot(graph, "graph")
+                    change_detector.get_changed_files(repo_path)
+            except Exception as e:
+                return f"Error building graph: {e}"
+
+        SERVER_STATE["graph"] = graph
+
+        # Start the background watcher if requested
+        if watch:
+            try:
+                builder = GraphBuilder()
+                builder.graph = graph
+                manager = IncrementalGraphManager(
+                    graph_builder=builder,
+                    match_extractor=None,
+                    project_root=repo_path
+                )
+                watcher = GraphWatcher(
+                    project_root=repo_path,
+                    incremental_graph_manager=manager,
+                    lock=SERVER_STATE["lock"],
+                    interval=1.0
+                )
+                watcher.start()
+                SERVER_STATE["watcher"] = watcher
+                print(f"[MCP Server] Started real-time background watcher for {repo_path}", file=sys.stderr)
+            except Exception as e:
+                print(f"[MCP Server Warning] Failed to start background watcher: {e}", file=sys.stderr)
+
         funcs = sum(len(v) for v in graph.get("functions", {}).values())
         routes = sum(len(v) for v in graph.get("routes", {}).values())
         edges = len(graph.get("execution_edges", []))
-        return (
-            f"Successfully compiled semantic graph!\n"
-            f"Metrics:\n"
-            f"  - Functions: {funcs}\n"
-            f"  - Routes: {routes}\n"
-            f"  - Execution Edges: {edges}"
-        )
-    except Exception as e:
-        return f"Error building graph: {e}"
 
+        if rebuild_incrementally:
+            return (
+                f"Successfully incrementally updated {len(changed_files)} file(s) in semantic graph!\n"
+                f"Updated files: {', '.join(changed_files[:5])}{'...' if len(changed_files) > 5 else ''}\n"
+                f"Metrics:\n"
+                f"  - Functions: {funcs}\n"
+                f"  - Routes: {routes}\n"
+                f"  - Execution Edges: {edges}"
+            )
+        elif loaded_from_cache:
+            return (
+                f"Successfully loaded cached graph from .semantic_cache/graph.json!\n"
+                f"Metrics:\n"
+                f"  - Functions: {funcs}\n"
+                f"  - Routes: {routes}\n"
+                f"  - Execution Edges: {edges}"
+            )
+        else:
+            return (
+                f"Successfully compiled semantic graph!\n"
+                f"Metrics:\n"
+                f"  - Functions: {funcs}\n"
+                f"  - Routes: {routes}\n"
+                f"  - Execution Edges: {edges}"
+            )
 
 def log_query_telemetry(repo_path: str, target: str, policy: str, context: dict):
     """
@@ -201,87 +301,159 @@ def log_query_telemetry(repo_path: str, target: str, policy: str, context: dict)
 
 
 @mcp.tool()
-def mcp_query_context(target: str, policy: str = "DEFAULT") -> dict:
+def mcp_query_context(
+    target: Optional[str] = None,
+    targets: Optional[List[str]] = None,
+    policy: str = "DEFAULT"
+) -> dict:
     """
-    Extracts pruned code snippets, execution chains, and route context matching a target change and policy.
+    Extracts pruned code snippets, execution chains, and route context matching single or batch target changes.
     
     Args:
-        target: Target spec string, e.g. 'FUNCTION:src/controllers/auth.controller.js:login'
-                or 'ROUTE:post:/login'.
-        policy: Blast radius pruning policy: 'DEFAULT', 'LOCAL_EDIT', 'SIGNATURE_CHANGE', or 'NEW_FEATURE'.
+        target: Single target spec string or comma-separated targets, e.g. 'FUNCTION:app.init' or 'FUNCTION:init, FUNCTION:handle'.
+        targets: Optional list of target spec strings for batch querying, e.g. ['FUNCTION:app.init', 'FUNCTION:app.handle'].
+        policy: Blast radius pruning policy: 'DEFAULT', 'LOCAL_EDIT', 'SIGNATURE_CHANGE', 'NEW_FEATURE', 'TAINT_FLOW', or 'DEPENDENCY_ONLY'.
     """
-    graph = SERVER_STATE.get("graph")
-    repo_path = SERVER_STATE.get("repo_path")
-    
-    if not graph or not repo_path:
-        return {"error": "Graph is not built yet. Please call mcp_build_graph(repo_path) first."}
+    target_list = []
+    if targets and isinstance(targets, list):
+        target_list.extend(targets)
+    if target:
+        if "," in target:
+            target_list.extend([t.strip() for t in target.split(",") if t.strip()])
+        elif target not in target_list:
+            target_list.append(target)
+
+    if not target_list:
+        return {"error": "No target specified. Please provide target or targets."}
+
+    with SERVER_STATE["lock"]:
+        graph = SERVER_STATE.get("graph")
+        repo_path = SERVER_STATE.get("repo_path")
         
-    try:
-        # Resolve target
-        with redirect_stdout_to_stderr():
-            target_node = resolve_target_node(graph, target)
-        if not target_node:
-            return {"error": f"Failed to resolve target node: {target}"}
+        if not graph or not repo_path:
+            return {"error": "Graph is not built yet. Please call mcp_build_graph(repo_path) first."}
             
-        policy_enum = TraversalPolicy[policy.upper()]
-        
-        # Traversal & Extraction
-        with redirect_stdout_to_stderr():
-            traversal = GraphTraversal(graph)
-            policy_engine = PolicyTraversalEngine(traversal)
-            extractor = ContextExtractor(graph, repo_path)
-            
-            impact = policy_engine.resolve_impact(target_node, policy_enum)
-            context = extractor.extract_context(impact)
-        
-        # Standardize snippet relative paths for the agent
-        for snippet in context.get("code_snippets", []):
-            if snippet.get("file"):
-                snippet["file"] = os.path.relpath(
-                    os.path.join(repo_path, snippet["file"]),
-                    repo_path
-                ).replace("\\", "/")
+        try:
+            combined_snippets = []
+            seen_snippet_keys = set()
+            combined_chains = []
+
+            for single_target in target_list:
+                try:
+                    with redirect_stdout_to_stderr():
+                        target_node = resolve_target_node(graph, single_target, repo_root=repo_path)
+                except TargetSpecError as e:
+                    return {"error": str(e)}
+                if not target_node:
+                    continue
+
+                policy_enum = TraversalPolicy[policy.upper()]
                 
-        # Perform shadow logging of metrics
-        log_query_telemetry(repo_path, target, policy, context)
-        
-        return context
-    except Exception as e:
-        return {"error": f"Failed to query context: {e}"}
+                with redirect_stdout_to_stderr():
+                    traversal = GraphTraversal(graph)
+                    policy_engine = PolicyTraversalEngine(traversal)
+                    extractor = ContextExtractor(graph, repo_path)
+                    
+                    impact = policy_engine.resolve_impact(target_node, policy_enum)
+                    context = extractor.extract_context(impact)
+
+                for snippet in context.get("code_snippets", []):
+                    if snippet.get("file"):
+                        rel_p = os.path.relpath(
+                            os.path.join(repo_path, snippet["file"]),
+                            repo_path
+                        ).replace("\\", "/")
+                        snippet["file"] = rel_p
+
+                    key = (snippet.get("file"), snippet.get("function_name"), snippet.get("code"))
+                    if key not in seen_snippet_keys:
+                        seen_snippet_keys.add(key)
+                        combined_snippets.append(snippet)
+
+                for chain in context.get("execution_chains", []):
+                    if chain not in combined_chains:
+                        combined_chains.append(chain)
+
+                log_query_telemetry(repo_path, single_target, policy, context)
+
+            if not combined_snippets:
+                return {"error": f"Failed to resolve any target nodes from: {target_list}"}
+
+            return {
+                "target_count": len(target_list),
+                "code_snippets": combined_snippets,
+                "execution_chains": combined_chains
+            }
+        except Exception as e:
+            return {"error": f"Failed to query context: {e}"}
 
 
 @mcp.tool()
-def mcp_impact_analysis(target: str) -> dict:
+def mcp_impact_analysis(
+    target: str,
+    policy: str = "DEFAULT",
+    max_depth: Optional[int] = None,
+    direction: str = "BOTH",
+    include_types: Optional[List[str]] = None,
+    include_tests: bool = False,
+) -> dict:
     """
-    Resolves the blast radius of a change to show upstream callers and downstream dependents.
+    Resolves the blast radius of a change using precision policies, depth limits, and edge filters.
     
     Args:
         target: Target spec string, e.g. 'FUNCTION:src/services/auth.service.js:loginUser'.
+        policy: Traversal policy ('DEFAULT', 'LOCAL_EDIT', 'SIGNATURE_CHANGE', 'NEW_FEATURE', 'TAINT_FLOW', 'DEPENDENCY_ONLY').
+        max_depth: Optional maximum depth limit (number of hops).
+        direction: Traversal direction ('UPSTREAM', 'DOWNSTREAM', or 'BOTH').
+        include_types: Optional list of edge types to include (e.g. ['FUNCTION_CALL', 'DB_ACCESS']).
+        include_tests: Also follow edges that originate in test files (hidden by default).
     """
-    graph = SERVER_STATE.get("graph")
-    if not graph:
-        return {"error": "Graph is not built yet. Please call mcp_build_graph(repo_path) first."}
-        
-    try:
-        with redirect_stdout_to_stderr():
-            target_node = resolve_target_node(graph, target)
-        if not target_node:
-            return {"error": f"Failed to resolve target node: {target}"}
+    with SERVER_STATE["lock"]:
+        graph = SERVER_STATE.get("graph")
+        if not graph:
+            return {"error": "Graph is not built yet. Please call mcp_build_graph(repo_path) first."}
             
-        with redirect_stdout_to_stderr():
-            traversal = GraphTraversal(graph)
-            upstream = traversal.find_upstream_nodes(target_node)
-            downstream = traversal.find_downstream_nodes(target_node)
-        
-        return {
-            "target": target_node,
-            "upstream_edges_count": len(upstream),
-            "downstream_edges_count": len(downstream),
-            "upstream_nodes": [edge["from"] for edge in upstream],
-            "downstream_nodes": [edge["to"] for edge in downstream]
-        }
-    except Exception as e:
-        return {"error": f"Failed to analyze impact: {e}"}
+        try:
+            try:
+                with redirect_stdout_to_stderr():
+                    target_node = resolve_target_node(graph, target, repo_root=SERVER_STATE.get("repo_path"))
+            except TargetSpecError as e:
+                return {"error": str(e)}
+            if not target_node:
+                return {"error": f"Failed to resolve target node: {target}"}
+
+            policy_enum = TraversalPolicy[policy.upper()] if policy.upper() in TraversalPolicy.__members__ else TraversalPolicy.DEFAULT
+
+            with redirect_stdout_to_stderr():
+                traversal = GraphTraversal(graph)
+                policy_engine = PolicyTraversalEngine(traversal)
+                impact = policy_engine.resolve_impact(
+                    target_node=target_node,
+                    policy=policy_enum,
+                    max_depth=max_depth,
+                    direction=direction.upper(),
+                    include_types=include_types,
+                    include_tests=include_tests,
+                )
+            
+            upstream = impact.get("upstream", [])
+            downstream = impact.get("downstream", [])
+            
+            return {
+                "target": target_node,
+                "policy_applied": policy_enum.name,
+                "max_depth_applied": max_depth,
+                "direction": direction,
+                "upstream_edges_count": len(upstream),
+                "downstream_edges_count": len(downstream),
+                "upstream_nodes": [edge["from"] for edge in upstream],
+                "downstream_nodes": [edge["to"] for edge in downstream],
+                "upstream_edges": upstream,
+                "downstream_edges": downstream
+            }
+        except Exception as e:
+            return {"error": f"Failed to analyze impact: {e}"}
+
 
 
 @mcp.tool()
@@ -289,13 +461,14 @@ def mcp_show_routes() -> dict:
     """
     Returns the flat HTTP routing table registered in the repository.
     """
-    graph = SERVER_STATE.get("graph")
-    if not graph:
-        return {"error": "Graph is not built yet. Please call mcp_build_graph(repo_path) first."}
-        
-    return {
-        "routes": graph.get("routes", {})
-    }
+    with SERVER_STATE["lock"]:
+        graph = SERVER_STATE.get("graph")
+        if not graph:
+            return {"error": "Graph is not built yet. Please call mcp_build_graph(repo_path) first."}
+            
+        return {
+            "routes": graph.get("routes", {})
+        }
 
 
 @mcp.tool()
@@ -303,27 +476,29 @@ def mcp_show_graph_metrics() -> dict:
     """
     Returns diagnostic metrics of the compiled semantic graph.
     """
-    graph = SERVER_STATE.get("graph")
-    if not graph:
-        return {"error": "Graph is not built yet. Please call mcp_build_graph(repo_path) first."}
+    with SERVER_STATE["lock"]:
+        graph = SERVER_STATE.get("graph")
+        if not graph:
+            return {"error": "Graph is not built yet. Please call mcp_build_graph(repo_path) first."}
+            
+        functions_count = sum(len(v) for v in graph.get("functions", {}).values())
+        imports_count = sum(len(v) for v in graph.get("imports", {}).values())
+        calls_count = sum(len(v) for v in graph.get("calls", {}).values())
+        routes_count = sum(len(v) for v in graph.get("routes", {}).values())
+        edges_count = len(graph.get("execution_edges", []))
+        taints_count = len(graph.get("taint_sources", []))
         
-    functions_count = sum(len(v) for v in graph.get("functions", {}).values())
-    imports_count = sum(len(v) for v in graph.get("imports", {}).values())
-    calls_count = sum(len(v) for v in graph.get("calls", {}).values())
-    routes_count = sum(len(v) for v in graph.get("routes", {}).values())
-    edges_count = len(graph.get("execution_edges", []))
-    taints_count = len(graph.get("taint_sources", []))
-    
-    return {
-        "metrics": {
-            "functions": functions_count,
-            "imports": imports_count,
-            "calls": calls_count,
-            "routes": routes_count,
-            "execution_edges": edges_count,
-            "taint_sources": taints_count
+        return {
+            "metrics": {
+                "functions": functions_count,
+                "imports": imports_count,
+                "calls": calls_count,
+                "routes": routes_count,
+                "execution_edges": edges_count,
+                "taint_sources": taints_count
+            }
         }
-    }
+
 
 
 @mcp.tool()
@@ -506,6 +681,221 @@ def v9_analyze_session(session_id: str, provider: Literal["gemini", "groq"] = "g
         return aggregate_v9_session_metrics(session_id, provider)
     except Exception as e:
         return {"error": str(e)}
+
+
+@mcp.tool()
+def mcp_expand_signature(file_path: str, function_name: str) -> str:
+    """
+    Given a file path and a function name, returns the full implementation body of that function.
+    Useful when a previous query returned only the signature due to budget/traversal limits,
+    but the LLM decides it needs the full implementation context.
+    """
+    with SERVER_STATE["lock"]:
+        repo_path = SERVER_STATE.get("repo_path")
+        if not repo_path:
+            return "Error: Graph is not built yet. Please call mcp_build_graph(repo_path) first."
+            
+        try:
+            extractor = ContextExtractor(graph={}, project_root=repo_path)
+            full_code = extractor.extract_function_code(file_path, function_name)
+            if not full_code:
+                return f"Error: Could not locate function '{function_name}' in '{file_path}'."
+            return full_code
+        except Exception as e:
+            return f"Error: {e}"
+
+
+# ==========================================================
+# DISCOVERY TOOLS -- symbol / literal search and neighbourhoods
+# ==========================================================
+_CAMEL_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
+_WORD_RE = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+_STOP = {"the", "and", "for", "with", "that", "this", "from", "when", "should", "not", "are", "was",
+         "have", "has", "but", "you", "can", "does", "into", "out", "all", "any", "use", "used", "using"}
+
+
+def _subwords(name: str) -> set:
+    return {w.lower() for w in _CAMEL_RE.findall(name or "") if len(w) >= 3}
+
+
+@mcp.tool()
+def mcp_find_symbols(query: str, limit: int = 10, include_tests: bool = False) -> dict:
+    """
+    Ranks files (and the symbols in them) against free text: identifier names, their
+    camelCase sub-words, class names, and user-facing string literals / JSX text. Meant for
+    turning an issue description into starting files: an exact quoted phrase that appears
+    as a string literal is the strongest signal ("Store address is required"), then exact
+    symbol names, then sub-word overlap.
+
+    Args:
+        query: Free text -- an issue sentence, an error message, or a symbol name.
+        limit: Maximum number of files to return.
+        include_tests: Rank test files too (off by default).
+    """
+    with SERVER_STATE["lock"]:
+        graph = SERVER_STATE.get("graph")
+        if not graph:
+            return {"error": "Graph is not built yet. Please call mcp_build_graph(repo_path) first."}
+    q = (query or "").strip()
+    if not q:
+        return {"error": "Empty query."}
+    q_low = q.lower()
+    tokens = [t for t in _WORD_RE.findall(q) if len(t) >= 2]
+    tok_low = {t.lower() for t in tokens} - _STOP
+    tok_sub = set()
+    for t in tokens:
+        tok_sub |= _subwords(t)
+    tok_sub -= _STOP
+
+    import math
+    scores, why = {}, {}
+    # per-file caps per evidence kind: a charting library has hundreds of `chart*` symbols in
+    # one file; without a cap that file wins every query containing the word "chart"
+    caps = {"symbol": 30.0, "sub": 8.0, "lit": 24.0, "litpart": 6.0, "name": 3.0}
+    spent = {}
+    def bump(file, pts, reason, kind):
+        used = spent.setdefault(file, {}).get(kind, 0.0)
+        room = caps[kind] - used
+        if room <= 0:
+            return
+        pts = min(pts, room)
+        spent[file][kind] = used + pts
+        scores[file] = scores.get(file, 0.0) + pts
+        why.setdefault(file, [])
+        if reason not in why[file] and len(why[file]) < 6:
+            why[file].append(reason)
+
+    # document frequency of sub-words over all symbols -> rare words carry the weight
+    fn_entries = [(file, fn) for file, fns in (graph.get("functions") or {}).items() for fn in fns
+                  if isinstance(fn, dict) and fn.get("name") and (include_tests or not fn.get("is_test"))]
+    df = {}
+    for _, fn in fn_entries:
+        for w in _subwords(fn["name"]) | (_subwords(fn["class"]) if fn.get("class") else set()):
+            df[w] = df.get(w, 0) + 1
+    n_sym = max(1, len(fn_entries))
+    idf = lambda w: max(0.15, 1.0 - math.log1p(df.get(w, 0)) / math.log1p(n_sym))
+
+    class_hits = set()
+    for file, fn in fn_entries:
+        name = fn["name"]
+        qual = f"{fn['class']}.{name}" if fn.get("class") else name
+        nl = name.lower()
+        if nl in tok_low:
+            # exact name match, damped for names that are everywhere (`update`, `init`)
+            bump(file, 10.0 * max(0.25, idf(nl)), f"symbol {qual}", "symbol")
+        elif fn.get("class") and fn["class"].lower() in tok_low:
+            # a class-name match is one piece of evidence per file, not one per method
+            # (class Chart has ~100 methods; the query word "chart" must not score 100x)
+            if (file, fn["class"]) not in class_hits:
+                class_hits.add((file, fn["class"]))
+                bump(file, 6.0 * max(0.25, idf(fn["class"].lower())), f"class {fn['class']}", "symbol")
+        else:
+            sw = _subwords(name) | (_subwords(fn["class"]) if fn.get("class") else set())
+            ov = sw & tok_sub
+            if ov and (len(ov) >= 2 or (len(sw) == 1 and idf(next(iter(ov))) > 0.6)):
+                pts = sum(2.0 * idf(w) for w in ov)
+                bump(file, pts, f"symbol {qual} ~ {'/'.join(sorted(ov))}", "sub")
+    for file, lits in (graph.get("literals") or {}).items():
+        if not include_tests and any(part in {"test", "tests", "__tests__", "spec"} for part in file.split("/")[:-1]):
+            continue
+        for lit in lits:
+            ll = lit.lower()
+            if len(ll) >= 6 and ll in q_low:
+                bump(file, 8.0 + min(len(ll), 40) / 8.0, f"literal {lit!r}", "lit")
+            elif len(q_low) >= 8 and q_low in ll:
+                bump(file, 6.0, f"literal {lit!r}", "lit")
+            else:
+                words = {w for w in _WORD_RE.findall(ll) if len(w) >= 3} - _STOP
+                ov = words & tok_low
+                if len(ov) >= 2 and len(ov) >= len(words) * 0.5:
+                    bump(file, 1.5 * len(ov), f"literal {lit!r} ~ {'/'.join(sorted(ov))}", "litpart")
+    # a file whose NAME contains a query word
+    for file in list(scores.keys()) + [f for f in (graph.get("functions") or {}) if f not in scores]:
+        base = file.rsplit("/", 1)[-1].lower()
+        for t in tok_low:
+            if len(t) >= 4 and t in base:
+                bump(file, 3.0, f"filename ~ {t}", "name")
+    ranked = sorted(scores.items(), key=lambda kv: -kv[1])[:max(1, limit)]
+    return {"query": q, "hits": [{"file": f, "score": round(sc, 1), "why": why[f],
+                                  "symbol": next((w.split(" ", 1)[1].split(" ~")[0] for w in why[f] if w.startswith("symbol ")), "")}
+                                 for f, sc in ranked]}
+
+
+@mcp.tool()
+def mcp_neighbors(target: str, hops: int = 1, include_tests: bool = False, limit: int = 40) -> dict:
+    """
+    Functions within `hops` call-edges of the target, both directions (callers and callees),
+    with the file each lives in. The one-hop neighbourhood is where a fix usually lands when
+    the matched file is a UI component and the real logic sits in a helper it calls.
+
+    Args:
+        target: FUNCTION:file:name (or FUNCTION:file:Class.method).
+        hops: Number of call-edges to follow (1-3).
+        include_tests: Include test functions.
+        limit: Maximum neighbours returned.
+    """
+    with SERVER_STATE["lock"]:
+        graph = SERVER_STATE.get("graph")
+        if not graph:
+            return {"error": "Graph is not built yet. Please call mcp_build_graph(repo_path) first."}
+        try:
+            with redirect_stdout_to_stderr():
+                node = resolve_target_node(graph, target, repo_root=SERVER_STATE.get("repo_path"))
+        except TargetSpecError as e:
+            return {"error": str(e)}
+        traversal = GraphTraversal(graph)
+        traversal.include_tests = include_tests
+        depth = max(1, min(int(hops or 1), 3))
+        with redirect_stdout_to_stderr():
+            up = traversal.find_upstream_nodes(node, max_depth=depth, include_types=["FUNCTION_CALL"])
+            down = traversal.find_downstream_nodes(node, max_depth=depth, include_types=["FUNCTION_CALL"])
+        out, seen = [], set()
+        for direction, edges, key in (("caller", up, "from"), ("callee", down, "to")):
+            for e in edges:
+                n = e[key]
+                if n.get("type") != "FUNCTION" or not n.get("file"):
+                    continue
+                k = (n["file"], n.get("function"), n.get("class"))
+                if k in seen:
+                    continue
+                seen.add(k)
+                out.append({"file": n["file"], "function": n.get("function"), "class": n.get("class"),
+                            "relation": direction, "depth": e.get("depth")})
+        out.sort(key=lambda x: (x["depth"] or 0, x["relation"], x["file"]))
+        return {"target": node, "hops": depth, "neighbors": out[:limit]}
+
+
+@mcp.tool()
+def mcp_tests_for(target: str, hops: int = 2, limit: int = 30) -> dict:
+    """
+    Test functions that (transitively, up to `hops`) call the target -- the tests a change
+    to it must keep passing, and the place to read the expected behaviour from.
+
+    Args:
+        target: FUNCTION:file:name (or FUNCTION:file:Class.method).
+        hops: Call-edges to follow upstream (1-4).
+    """
+    with SERVER_STATE["lock"]:
+        graph = SERVER_STATE.get("graph")
+        if not graph:
+            return {"error": "Graph is not built yet. Please call mcp_build_graph(repo_path) first."}
+        try:
+            with redirect_stdout_to_stderr():
+                node = resolve_target_node(graph, target, repo_root=SERVER_STATE.get("repo_path"))
+        except TargetSpecError as e:
+            return {"error": str(e)}
+        traversal = GraphTraversal(graph)
+        traversal.include_tests = True
+        with redirect_stdout_to_stderr():
+            up = traversal.find_upstream_nodes(node, max_depth=max(1, min(int(hops or 2), 4)), include_types=["FUNCTION_CALL"])
+        test_files = {f for f, fns in (graph.get("functions") or {}).items() if any(isinstance(x, dict) and x.get("is_test") for x in fns)}
+        out, seen = [], set()
+        for e in up:
+            n = e["from"]
+            if n.get("file") in test_files and (n.get("file"), n.get("function")) not in seen:
+                seen.add((n.get("file"), n.get("function")))
+                out.append({"file": n["file"], "function": n.get("function"), "depth": e.get("depth")})
+        return {"target": node, "tests": out[:limit]}
 
 
 if __name__ == "__main__":

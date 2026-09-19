@@ -10,7 +10,7 @@ from semantic_core.function_index import (
     FunctionIndex
 )
 
-# from config.debug_flags import *
+from config.debug_flags import DEBUG_GRAPH_BUILD
 from config.settings import *
 
 from semantic_core.frameworks.express_route_normalizer import (
@@ -68,7 +68,17 @@ class GraphBuilder:
             "variable_states": [],
 
             "returns": [],
+
+            # Barrel files: file -> {"star": [source files], "names": {exported: (source file, original)}}
+            "reexports": {},
+
+            # file -> {class name -> {"superclass": name or None}}
+            "classes": {},
         }
+        # Frameworks detected from the repo manifest (set by build_graph). Express/Mongoose/SQL
+        # heuristics -- routes, DB sinks, req.* taint -- only run when the repo uses them; on a
+        # charting library `chart.update()` used to become a DB_ACCESS edge to model "chart".
+        self.frameworks = set()
         self.symbol_table = SymbolTable()
         self.function_index = (
             FunctionIndex()
@@ -103,6 +113,9 @@ class GraphBuilder:
             Dict: The complete, traced Semantic Graph dictionary.
         """
         
+        if hasattr(self, "project_root"):
+            self.symbol_table.project_root = self.project_root
+            
         self.semantic_matches = semantic_matches
 
         if DEBUG_MATCHES:
@@ -128,6 +141,8 @@ class GraphBuilder:
         for sm in semantic_matches:
             if sm.match_type == "IMPORT":
                 self.handle_import(sm)
+            elif sm.match_type == "REEXPORT":
+                self.handle_reexport(sm)
 
         # ======================================================
         # PASS 2 — SYMBOL ALIASES
@@ -149,9 +164,18 @@ class GraphBuilder:
 
                 self.handle_destructure_alias(sm)
 
+
+        # ======================================================
+        # PASS — VARIABLE TYPE RESOLUTION
+        # ======================================================
+        for sm in semantic_matches:
+            if sm.match_type == "VARIABLE_ASSIGNMENT":
+                self.handle_variable_type(sm)
+
         # ======================================================
         # PASS 3 — FUNCTION DEFINITIONS
         # ======================================================
+
 
         for sm in semantic_matches:
 
@@ -244,6 +268,8 @@ class GraphBuilder:
         # ======================================================
 
         self.build_argument_parameter_flow()
+        self.infer_parameter_types_from_flow()
+        self.resolve_pending_calls()
 
         # ======================================================
         # DETECT TAINT SOURCES
@@ -493,7 +519,24 @@ class GraphBuilder:
     # IMPORTS
     # ======================================================
 
+    _WEB_FRAMEWORKS = {"express", "koa", "fastify", "hapi", "nest", "next", "flask", "django", "fastapi"}
+    _DB_FRAMEWORKS = {"mongoose", "sequelize", "prisma", "typeorm", "knex", "pg", "mysql", "mysql2", "sqlite3",
+                      "mongodb", "sqlalchemy", "redis", "ioredis"}
+
+    def _note_framework_import(self, import_source):
+        """Frameworks are inferred from what the code imports (a manifest is optional)."""
+        pkg = (import_source or "").split("/")[0].lstrip("@").lower()
+        if pkg in self._WEB_FRAMEWORKS or pkg in self._DB_FRAMEWORKS:
+            self.frameworks.add(pkg)
+
+    def _db_heuristics_enabled(self):
+        # Express-style apps persist through SOME client, named or not; standalone libraries
+        # (charting, markdown, PDF) do not -- there `chart.update()` is just a method call.
+        return bool(self.frameworks & (self._WEB_FRAMEWORKS | self._DB_FRAMEWORKS))
+
     def handle_import(self, sm):
+
+        self._note_framework_import(sm.get("import.source"))
 
         self.ensure_file(
             "imports",
@@ -510,7 +553,8 @@ class GraphBuilder:
 
             import_source=sm.get(
                 "import.source"
-            )
+            ),
+            exported_name=sm.get("import.name"),
         )
 
         self.graph["imports"][
@@ -529,6 +573,195 @@ class GraphBuilder:
                 "import.alias"
             )
         })
+
+    def handle_reexport(self, sm):
+        """`export * from './core'` / `export { a as b } from './x'` recorded per file so call
+        resolution can follow a barrel to the defining module."""
+        source_file = self.symbol_table.resolve_module_path(sm.file_path, sm.get("reexport.source"))
+        if not source_file:
+            return
+        entry = self.graph["reexports"].setdefault(sm.file_path, {"star": [], "names": {}})
+        if sm.get("reexport.star"):
+            if source_file not in entry["star"]:
+                entry["star"].append(source_file)
+        for exported, original in (sm.get("reexport.names") or []):
+            entry["names"][exported] = [source_file, original]
+
+    def resolve_through_reexports(self, file_path, func_name, _depth=0):
+        """(file, function metadata, original name) for func_name as exported by file_path,
+        following barrels up to 6 hops; (None, None, func_name) if nothing defines it."""
+        if not file_path or _depth > 6:
+            return None, None, func_name
+        meta = self.function_index.resolve_function(file_path, func_name)
+        if meta:
+            return file_path, meta, func_name
+        entry = self.graph["reexports"].get(file_path)
+        if not entry:
+            return None, None, func_name
+        named = entry["names"].get(func_name)
+        if named:
+            f, meta, orig = self.resolve_through_reexports(named[0], named[1], _depth + 1)
+            if meta:
+                return f, meta, orig
+        for src in entry["star"]:
+            f, meta, orig = self.resolve_through_reexports(src, func_name, _depth + 1)
+            if meta:
+                return f, meta, orig
+        return None, None, func_name
+
+    def resolve_class_file(self, file_path, class_name):
+        """File that defines class_name as seen from file_path: same file, else via imports/barrels."""
+        if class_name in self.graph["classes"].get(file_path, {}):
+            return file_path
+        imported = self.symbol_table.resolve_import(file_path, class_name)
+        if imported:
+            exported_as = self.symbol_table.resolve_imported_name(file_path, class_name) or class_name
+            return self._find_class_through_reexports(imported, exported_as)
+        return None
+
+    def _find_class_through_reexports(self, file_path, class_name, _depth=0):
+        if not file_path or _depth > 6:
+            return None
+        if class_name in self.graph["classes"].get(file_path, {}):
+            return file_path
+        entry = self.graph["reexports"].get(file_path)
+        if not entry:
+            return None
+        named = entry["names"].get(class_name)
+        if named:
+            f = self._find_class_through_reexports(named[0], named[1], _depth + 1)
+            if f:
+                return f
+        for src in entry["star"]:
+            f = self._find_class_through_reexports(src, class_name, _depth + 1)
+            if f:
+                return f
+        return None
+
+    def resolve_field_type(self, file_path, class_name, field, _depth=0):
+        """Declared/assigned type of `this.<field>` in class_name (walking superclasses)."""
+        if not class_name or _depth > 8:
+            return None
+        cls_file = self.resolve_class_file(file_path, class_name) or file_path
+        entry = self.graph["classes"].get(cls_file, {}).get(class_name) or {}
+        ftype = (entry.get("fields") or {}).get(field)
+        if ftype:
+            return ftype
+        if entry.get("superclass"):
+            return self.resolve_field_type(cls_file, entry["superclass"], field, _depth + 1)
+        return None
+
+    def infer_parameter_types_from_flow(self):
+        """`wrap(new Engine())` types `x` inside `wrap(x)`; `wrap(e)` with a typed `e` too.
+        Uses the argument->parameter flow the builder already computes."""
+        import re as _re
+        new_re = _re.compile(r"^\s*new\s+([A-Za-z_$][\w$.]*)\s*\(")
+        for flow in self.graph.get("data_flow", []):
+            src = flow.get("source")
+            tf, tfn, tp = flow.get("target_file"), flow.get("target_function"), flow.get("target_param")
+            if not (isinstance(src, str) and tf and tfn and tp):
+                continue
+            if self.symbol_table.resolve_type(tf, tfn, tp):
+                continue  # declared type wins
+            m = new_re.match(src)
+            if m:
+                self.symbol_table.register_type(tf, tfn, tp, m.group(1).split(".")[-1])
+                continue
+            if _re.fullmatch(r"[A-Za-z_$][\w$]*", src.strip()) and flow.get("source_file"):
+                t = self.symbol_table.resolve_type(flow["source_file"], flow.get("source_function") or "GLOBAL", src.strip())
+                if t:
+                    self.symbol_table.register_type(tf, tfn, tp, t)
+
+    _BUNDLE_RE = None
+
+    def _unique_owner(self, cands):
+        """The single (file, class) that defines a method, or None. Built bundles that copy
+        the source (lib/marked.js, lib/marked.esm.js next to src/Tokenizer.js) are the same
+        class, not an ambiguity: when every candidate has one class name, prefer the
+        non-bundle file, then the one under src/."""
+        import re as _re
+        if not cands:
+            return None
+        if len(cands) == 1:
+            return next(iter(cands))
+        if GraphBuilder._BUNDLE_RE is None:
+            GraphBuilder._BUNDLE_RE = _re.compile(r"(^|/)(lib|dist|build|bundle|umd|esm|cjs|min)(/|$)|[.](min|esm|umd|cjs|bundle)[.][cm]?js$")
+        # bundles first: a UMD/ESM build copies every source class (Babel even renames the
+        # prototype holder `_proto`); source files decide uniqueness
+        non_bundle = [c for c in cands if not GraphBuilder._BUNDLE_RE.search(c[0])]
+        pool = non_bundle or list(cands)
+        if len({c for _, c in pool}) != 1:
+            return None
+        in_src = [c for c in pool if "/src/" in "/" + c[0]]
+        pool = in_src or pool
+        if len(pool) == 1:
+            return pool[0]
+        return None
+
+    def resolve_pending_calls(self):
+        """Final pass over calls that stayed unresolved: receiver types learned late (argument
+        flow), then a unique-method-name fallback. Fallback resolutions are flagged
+        resolution="name-unique" on the call and confidence="name-unique" on the edge so a
+        consumer can weigh them; a method name defined by more than one class stays
+        unresolved -- guessing is worse than not knowing."""
+        # method name -> {(file, class)} over production code
+        owners = {}
+        for file, fns in self.graph["functions"].items():
+            for fn in fns:
+                if not isinstance(fn, dict) or not fn.get("class") or fn.get("is_test"):
+                    continue
+                owners.setdefault(fn["name"], set()).add((file, fn["class"]))
+        for file_path, calls in self.graph["calls"].items():
+            for call in calls:
+                if call.get("resolved_function"):
+                    continue
+                recv = call.get("receiver")
+                func = call.get("function")
+                if not recv or not func or recv in ("this", "super", "self"):
+                    continue
+                caller = call.get("caller_function") or "GLOBAL"
+                typed_file = typed_meta = typed_class = None
+                if "." not in recv:
+                    t = self.symbol_table.resolve_type(file_path, caller, recv)
+                    if t:
+                        typed_file, typed_meta = self.resolve_method(file_path, t, func)
+                        typed_class, how = t, "typed"
+                if not typed_meta and "(" not in recv and "[" not in recv:
+                    # unique-name fallback also covers `this.tokenizer.space()` when the
+                    # field's type is unknown but only one class defines `space`
+                    cands = self._unique_owner(owners.get(func, set()))
+                    if cands:
+                        cf, cc = cands
+                        typed_meta = self.function_index.resolve_function(cf, f"{cc}.{func}")
+                        typed_file, typed_class, how = cf, cc, "name-unique"
+                if not typed_meta:
+                    continue
+                call.update({"object": typed_class, "resolved_file": typed_file, "resolved_function": typed_meta,
+                             "resolved_class": typed_meta.get("class") or typed_class, "resolution": how})
+                from_node = {"type": "FUNCTION", "file": file_path, "function": caller if caller != "GLOBAL" else "GLOBAL_SCOPE"}
+                if call.get("caller_class"):
+                    from_node["class"] = call["caller_class"]
+                is_test = bool(call.get("is_test"))
+                self.add_execution_edge(
+                    from_node=from_node,
+                    to_node={"type": "FUNCTION", "file": typed_file, "function": func, "class": typed_meta.get("class") or typed_class},
+                    edge_type="FUNCTION_CALL", is_test=is_test,
+                )
+                if how == "name-unique":
+                    self.graph["execution_edges"][-1]["confidence"] = "name-unique"
+
+    def resolve_method(self, file_path, class_name, method, _depth=0):
+        """(file, metadata) for class_name.method, walking the superclass chain."""
+        if not class_name or _depth > 8:
+            return None, None
+        cls_file = self.resolve_class_file(file_path, class_name) or file_path
+        meta = self.function_index.resolve_function(cls_file, f"{class_name}.{method}")
+        if meta:
+            return cls_file, meta
+        sup = (self.graph["classes"].get(cls_file, {}).get(class_name) or {}).get("superclass")
+        if sup:
+            return self.resolve_method(cls_file, sup, method, _depth + 1)
+        return None, None
 
     # ======================================================
     # ROUTES
@@ -803,24 +1036,45 @@ class GraphBuilder:
             sm.file_path
         )
 
+        owner_class = sm.get("function.class")
+        superclass = sm.get("function.superclass")
+        if owner_class:
+            cls_entry = self.graph["classes"].setdefault(sm.file_path, {}).setdefault(owner_class, {"superclass": None})
+            if superclass and not cls_entry.get("superclass"):
+                cls_entry["superclass"] = superclass
+            for field, ftype in (sm.get("function.field_types") or {}).items():
+                cls_entry.setdefault("fields", {})[field] = ftype
+        # declared receiver types (JSDoc @param / TS annotation), scoped to this function
+        for pname, ptype in (sm.get("function.param_types") or {}).items():
+            self.symbol_table.register_type(sm.file_path, function_name, pname, ptype)
+
+        metadata = {
+            "name": function_name,
+            "file": sm.file_path,
+            "start_line": sm.start_point[0] + 1,
+            "end_line": sm.end_point[0] + 1,
+        }
+        if owner_class:
+            metadata["class"] = owner_class
+        if getattr(sm, "is_test", False):
+            metadata["is_test"] = True
+
+        # Methods are registered under their qualified name too, so `this.x()` / `obj.x()`
+        # with a known receiver type resolve to THIS class's x, not whichever x was seen last.
+        if owner_class:
+            self.function_index.register_function(
+                file_path=sm.file_path,
+                function_name=f"{owner_class}.{function_name}",
+                metadata=metadata,
+            )
+
         self.function_index.register_function(
 
             file_path=sm.file_path,
 
             function_name=function_name,
 
-            metadata={
-
-                "name": function_name,
-
-                "file": sm.file_path,
-
-                "start_line":
-                    sm.start_point[0] + 1,
-
-                "end_line":
-                    sm.end_point[0] + 1
-            }
+            metadata=metadata
 
             # metadata={
 
@@ -835,16 +1089,7 @@ class GraphBuilder:
 
         self.graph["functions"][
             sm.file_path
-        ].append({
-
-            "name": function_name,
-
-            "file": sm.file_path,
-
-            "start_line": sm.start_point[0] + 1,
-
-            "end_line": sm.end_point[0] + 1
-        })
+        ].append(dict(metadata))
 
     # ======================================================
     # CALLS
@@ -860,20 +1105,78 @@ class GraphBuilder:
             "call.obj_name"
         )
 
-        obj = (
-            self.symbol_table.resolve_alias(
-
-                sm.file_path,
-
-                sm.scope_id,
-
-                raw_object_name
-            )
+        owner_fn = sm.owner_function or "GLOBAL"
+        resolved_type = self.symbol_table.resolve_type(
+            sm.file_path,
+            owner_fn,
+            raw_object_name
         )
+
+        if resolved_type:
+            obj = resolved_type
+        else:
+            obj = (
+                self.symbol_table.resolve_alias(
+                    sm.file_path,
+                    sm.scope_id,
+                    raw_object_name
+                )
+            )
+
 
         func = sm.get(
             "call.func_name"
         )
+        # name the callee is DEFINED under when it differs from the local call name
+        # (`import { helper as h }` -> h() targets helper)
+        target_name = func
+
+        # ==================================================
+        # RECEIVER-TYPED RESOLUTION: this / super / new X()
+        # ==================================================
+        # `this.tick()` inside class Engine -> Engine.tick (0/2120 such calls resolved before
+        # on Chart.js + p5.js); `super.x()` -> the superclass's x; `e.start()` after
+        # `const e = new Engine()` -> Engine.start via the registered variable type.
+        typed_file = typed_meta = typed_class = None
+        field_type = None
+        if isinstance(raw_object_name, str) and raw_object_name.startswith("this.") and getattr(sm, "owner_class", None):
+            field_type = self.resolve_field_type(sm.file_path, sm.owner_class, raw_object_name[5:])
+        if field_type:
+            typed_file, typed_meta = self.resolve_method(sm.file_path, field_type, func)
+            typed_class = field_type
+        elif raw_object_name in ("this", "self", "super") and getattr(sm, "owner_class", None):
+            cls = sm.owner_class
+            if raw_object_name == "super":
+                cls = (self.graph["classes"].get(sm.file_path, {}).get(cls) or {}).get("superclass")
+            typed_file, typed_meta = self.resolve_method(sm.file_path, cls, func)
+            typed_class = cls
+        elif resolved_type:
+            typed_file, typed_meta = self.resolve_method(sm.file_path, resolved_type, func)
+            typed_class = resolved_type
+        if typed_meta:
+            self.ensure_file("calls", sm.file_path)
+            call_id = self.build_call_id(sm)
+            self.graph["calls"][sm.file_path].append({
+                "call_id": call_id,
+                # "object" keeps its historical meaning -- the RESOLVED receiver type;
+                # the raw receiver text (this / super / the variable) is in "receiver".
+                "object": typed_meta.get("class") or typed_class,
+                "receiver": raw_object_name,
+                "function": func,
+                "resolved_file": typed_file,
+                "resolved_function": typed_meta,
+                "resolved_class": typed_meta.get("class") or typed_class,
+                "resolution": "typed",
+                "caller_function": sm.owner_function,
+            })
+            self.add_execution_edge(
+                from_node=self._from_node(sm),
+                to_node={"type": "FUNCTION", "file": typed_file, "function": func,
+                         "class": typed_meta.get("class") or typed_class},
+                edge_type="FUNCTION_CALL",
+                is_test=getattr(sm, "is_test", False),
+            )
+            return
 
 
         # ==================================================
@@ -928,6 +1231,11 @@ class GraphBuilder:
                     func
                 )
             )
+            if not resolved_function:
+                # `import { boot } from './index'` where index.js re-exports it
+                f2, m2, orig = self.resolve_through_reexports(resolved_file, func)
+                if m2:
+                    resolved_file, resolved_function, target_name = f2, m2, orig
 
         # ==============================================
         # FALLBACK 1 — DESTRUCTURED IMPORT
@@ -968,6 +1276,11 @@ class GraphBuilder:
                     self.function_index
                     .resolve_function(resolved_file, func)
                 )
+                if not resolved_function:
+                    imported_as = self.symbol_table.resolve_imported_name(sm.file_path, func) or func
+                    f2, m2, orig = self.resolve_through_reexports(resolved_file, imported_as)
+                    if m2:
+                        resolved_file, resolved_function, target_name = f2, m2, orig
 
         # ==============================================
         # FALLBACK 3 — LOCAL DEFINITION
@@ -1002,6 +1315,8 @@ class GraphBuilder:
         }
 
         if (
+            "express" in self.frameworks
+            and
             obj in ignored_objects
             and
             func in ignored_functions
@@ -1025,6 +1340,8 @@ class GraphBuilder:
 
             "object": obj,
 
+            "receiver": raw_object_name,
+
             "function": func,
 
             "resolved_file":
@@ -1034,7 +1351,11 @@ class GraphBuilder:
             resolved_function,
 
             "caller_function":
-            sm.owner_function
+            sm.owner_function,
+
+            "caller_class": getattr(sm, "owner_class", None),
+
+            "is_test": bool(getattr(sm, "is_test", False)),
         })
         # ==================================================
         # EXECUTION EDGE
@@ -1046,29 +1367,32 @@ class GraphBuilder:
         # print("RESOLVED FUNCTION:", resolved_function)
 
         if resolved_file or resolved_function:
-
+            to_node = {
+                "type": "FUNCTION",
+                "file": resolved_file or sm.file_path,
+                "function": (target_name if isinstance(resolved_function, dict) else func) or "GLOBAL_SCOPE"
+            }
+            if isinstance(resolved_function, dict) and resolved_function.get("class"):
+                to_node["class"] = resolved_function["class"]
             self.add_execution_edge(
-
-                from_node={
-
-                    "type": "FUNCTION",
-
-                    "file": sm.file_path,
-
-                    "function": sm.owner_function or "GLOBAL_SCOPE"
-                },
-
-                to_node={
-
-                    "type": "FUNCTION",
-
-                    "file": resolved_file or sm.file_path,
-
-                    "function": func or "GLOBAL_SCOPE"
-                },
-
-                edge_type="FUNCTION_CALL"
+                from_node=self._from_node(sm),
+                to_node=to_node,
+                edge_type="FUNCTION_CALL",
+                is_test=getattr(sm, "is_test", False),
             )
+
+    def _from_node(self, sm):
+        """The calling function as an edge endpoint: file + bare name, plus the specific
+        occurrence's line and owning class so same-named methods stay distinguishable."""
+        node = {
+            "type": "FUNCTION",
+            "file": sm.file_path,
+            "function": sm.owner_function or "GLOBAL_SCOPE",
+            "function_line": sm.owner_function_line,
+        }
+        if getattr(sm, "owner_class", None):
+            node["class"] = sm.owner_class
+        return node
 
     # ======================================================
     # MODEL DECLARATIONS
@@ -1086,6 +1410,8 @@ class GraphBuilder:
 
     def handle_database(self, sm):
 
+        if not self._db_heuristics_enabled():
+            return
         self.ensure_file(
             "database",
             sm.file_path
@@ -1215,24 +1541,21 @@ class GraphBuilder:
         self,
         from_node,
         to_node,
-        edge_type
+        edge_type,
+        is_test=False,
     ):
-        # print("\n[EDGE ADDED]")
-        # print("FROM:", from_node)
-        # print("TO:", to_node)
-        # print("TYPE:", edge_type)
-
+        edge = {
+            "from": from_node,
+            "to": to_node,
+            "type": edge_type
+        }
+        if is_test:
+            # Test-partition edges are kept but hidden from default traversal (see
+            # GraphTraversal); `mcp_tests_for` / include_tests=True surface them.
+            edge["is_test"] = True
         self.graph[
             "execution_edges"
-        ].append({
-
-            "from": from_node,
-
-            "to": to_node,
-
-            "type": edge_type
-        })
-
+        ].append(edge)
 
     # ==========================================================
     # DESTRUCTURED SYMBOL
@@ -1285,12 +1608,26 @@ class GraphBuilder:
             "function.name"
         ) or sm.owner_function or "GLOBAL_SCOPE"
 
-        param = sm.get(
-            "param.name"
-        )
+        param = sm.get("param.name")
+        if not param:
+            if sm.get("param.destructure_prop"):
+                param = sm.get("param.destructure_prop")
+            elif sm.get("param.rest"):
+                param = f"...{sm.get('param.rest')}"
+            elif sm.get("param.destructure_rest"):
+                param = f"...{sm.get('param.destructure_rest')}"
+            elif sm.get("param.star_args"):
+                param = f"*{sm.get('param.star_args')}"
+            elif sm.get("param.kw_args"):
+                param = f"**{sm.get('param.kw_args')}"
 
-        from pathlib import Path
-        print(f"📥 [GRAPH INSERT PARAMETER] File: {Path(sm.file_path).name}, Function: {function_name}, Parameter: {param}")
+
+        if not param:
+            return
+
+        if DEBUG_GRAPH_BUILD:
+            from pathlib import Path
+            print(f"📥 [GRAPH INSERT PARAMETER] File: {Path(sm.file_path).name}, Function: {function_name}, Parameter: {param}")
 
         existing = None
 
@@ -1332,6 +1669,25 @@ class GraphBuilder:
 
             existing["params"].append(param)
 
+        if "param_groups" not in existing:
+            existing["param_groups"] = []
+
+        is_destructured = bool(sm.get("param.destructure_prop"))
+        is_rest = bool(sm.get("param.rest") or sm.get("param.destructure_rest"))
+
+        if is_destructured:
+            if existing["param_groups"] and existing["param_groups"][-1]["type"] == "destructured":
+                if param not in existing["param_groups"][-1]["keys"]:
+                    existing["param_groups"][-1]["keys"].append(param)
+            else:
+                existing["param_groups"].append({"type": "destructured", "keys": [param]})
+        elif is_rest:
+            existing["param_groups"].append({"type": "rest", "name": param})
+        else:
+            existing["param_groups"].append({"type": "positional", "name": param})
+
+
+
 
     # ==========================================================
     # CALL ARGUMENTS
@@ -1358,8 +1714,9 @@ class GraphBuilder:
             sm.owner_function or "GLOBAL_SCOPE"
         )
 
-        from pathlib import Path
-        print(f"📥 [GRAPH INSERT ARGUMENT] File: {Path(sm.file_path).name}, Call ID: {call_id}, Function: {owner_function}, Argument: {arg}")
+        if DEBUG_GRAPH_BUILD:
+            from pathlib import Path
+            print(f"📥 [GRAPH INSERT ARGUMENT] File: {Path(sm.file_path).name}, Call ID: {call_id}, Function: {owner_function}, Argument: {arg}")
 
         existing = None
 
@@ -1438,6 +1795,7 @@ class GraphBuilder:
                 target_file = (
                     resolved_function["file"]
                 )
+                source_site = {"source_file": file_path, "source_function": call.get("caller_function") or "GLOBAL"}
 
                 # ==================================================
                 # FIND CALL ARGUMENTS
@@ -1471,6 +1829,7 @@ class GraphBuilder:
                 # ==================================================
 
                 parameters = []
+                param_groups = []
 
                 for param_entry in self.graph[
                     "parameters"
@@ -1488,6 +1847,7 @@ class GraphBuilder:
                         parameters = (
                             param_entry["params"]
                         )
+                        param_groups = param_entry.get("param_groups", [])
 
                         break
 
@@ -1495,44 +1855,79 @@ class GraphBuilder:
                 # CONNECT ARG → PARAM
                 # ==================================================
 
-                # print("\n" + "=" * 80)
-                # print("BUILD FLOW DEBUG")
-                # print("=" * 80)
+                if not arguments or not (parameters or param_groups):
+                    continue
 
-                # print("CALL:")
-                # print(call)
+                import re
 
-                # print("CALL ID:")
-                # print(call_id)
+                if param_groups:
+                    for i in range(min(len(arguments), len(param_groups))):
+                        arg_str = arguments[i]
+                        group = param_groups[i]
 
-                # print("ARGUMENTS GRAPH:")
-                # print(self.graph["arguments"])
+                        if group["type"] == "destructured":
+                            destructured_keys = group["keys"]
+                            # If argument is an object literal (e.g. "{ email: req.body.email, password: safePass }")
+                            if isinstance(arg_str, str) and arg_str.strip().startswith("{") and ":" in arg_str:
+                                props = re.findall(r'(\w+)\s*:\s*([^,}]+)', arg_str)
+                                if props:
+                                    matched_prop = False
+                                    for key, val in props:
+                                        key = key.strip()
+                                        val = val.strip()
+                                        if key in destructured_keys:
+                                            self.graph["data_flow"].append({
+                                                **source_site,
+                                                "source": val,
+                                                "target_file": target_file,
+                                                "target_function": target_function,
+                                                "target_param": key
+                                            })
+                                            matched_prop = True
+                                    if matched_prop:
+                                        continue
+                            # If not object literal or unmatched, map arg_str to all destructured keys
+                            for key in destructured_keys:
+                                self.graph["data_flow"].append({
+                                    **source_site,
+                                    "source": arg_str,
+                                    "target_file": target_file,
+                                    "target_function": target_function,
+                                    "target_param": key
+                                })
 
-                # print("PARAMETERS GRAPH:")
-                # print(self.graph["parameters"])
+                        elif group["type"] == "rest":
+                            rest_name = group["name"].lstrip(".")
+                            for j in range(i, len(arguments)):
+                                self.graph["data_flow"].append({
+                                    **source_site,
+                                    "source": arguments[j],
+                                    "target_file": target_file,
+                                    "target_function": target_function,
+                                    "target_param": rest_name
+                                })
+                            break
+
+                        else:  # positional
+                            self.graph["data_flow"].append({
+                                **source_site,
+                                "source": arg_str,
+                                "target_file": target_file,
+                                "target_function": target_function,
+                                "target_param": group["name"]
+                            })
+                else:
+                    # Fallback if param_groups is not present
+                    for i in range(min(len(arguments), len(parameters))):
+                        self.graph["data_flow"].append({
+                            **source_site,
+                            "source": arguments[i],
+                            "target_file": target_file,
+                            "target_function": target_function,
+                            "target_param": parameters[i]
+                        })
 
 
-                for i in range(
-
-                    min(
-                        len(arguments),
-                        len(parameters)
-                    )
-                ):
-
-                    self.graph["data_flow"].append({
-
-                        "source": arguments[i],
-
-                        "target_file":
-                            target_file,
-
-                        "target_function":
-                            target_function,
-
-                        "target_param":
-                            parameters[i]
-                    })
 
 
     # ==========================================================
@@ -1553,7 +1948,8 @@ class GraphBuilder:
             # ==================================================
             # EXPRESS USER INPUT
             # ==================================================
-            print("inside detect_taint_sources (flow):", flow)
+            if not (self.frameworks & self._WEB_FRAMEWORKS):
+                continue
 
             if (
 
@@ -1961,11 +2357,14 @@ class GraphBuilder:
 
             variable = sm.get(
                 "assign.variable"
+            ) or sm.get(
+                "field.variable"
             )
 
             value = sm.get(
                 "assign.value"
-            )
+            ) or ""
+
 
             tainted = False
             sanitized = False
@@ -2000,8 +2399,9 @@ class GraphBuilder:
                     sanitized = True
                     tainted = False
 
-            from pathlib import Path
-            print(f"📥 [GRAPH INSERT VARIABLE] File: {Path(sm.file_path).name}, Function: {owner_fn}, Variable: {variable}, Value: {value[:30]}..., Tainted: {tainted}, Sanitized: {sanitized}")
+            if DEBUG_GRAPH_BUILD:
+                from pathlib import Path
+                print(f"📥 [GRAPH INSERT VARIABLE] File: {Path(sm.file_path).name}, Function: {owner_fn}, Variable: {variable}, Value: {value[:30]}..., Tainted: {tainted}, Sanitized: {sanitized}")
 
             self.graph[
                 "variable_states"
@@ -2055,11 +2455,14 @@ class GraphBuilder:
 
             variable = sm.get(
                 "assign.variable"
+            ) or sm.get(
+                "field.variable"
             )
 
             value = sm.get(
                 "assign.value"
-            )
+            ) or ""
+
 
             tainted = False
             sanitized = False
@@ -2086,8 +2489,9 @@ class GraphBuilder:
                     sanitized = True
                     tainted = False
 
-            from pathlib import Path
-            print(f"📥 [GRAPH INSERT VARIABLE FOR MATCHES] File: {Path(sm.file_path).name}, Function: {owner_fn}, Variable: {variable}, Value: {value[:30]}..., Tainted: {tainted}, Sanitized: {sanitized}")
+            if DEBUG_GRAPH_BUILD:
+                from pathlib import Path
+                print(f"📥 [GRAPH INSERT VARIABLE FOR MATCHES] File: {Path(sm.file_path).name}, Function: {owner_fn}, Variable: {variable}, Value: {value[:30]}..., Tainted: {tainted}, Sanitized: {sanitized}")
 
             self.graph[
                 "variable_states"
@@ -2213,5 +2617,28 @@ class GraphBuilder:
                         "returned_value":
                             returned_value
                     })
+
+    # ======================================================
+    # VARIABLE TYPE RESOLUTION
+    # ======================================================
+
+    def handle_variable_type(self, sm):
+        variable = sm.get("assign.variable") or sm.get("field.variable")
+        value = sm.get("assign.value")
+        
+        class_name = sm.get("assign.type") or sm.get("assign.value_type") or sm.get("field.type")
+        if not class_name and value:
+            from semantic_core.symbol_resolver import SymbolResolver
+            class_name = SymbolResolver.extract_instantiated_class(value)
+            
+        if variable and class_name:
+            owner_fn = sm.owner_function or "GLOBAL"
+            self.symbol_table.register_type(
+                sm.file_path,
+                owner_fn,
+                variable,
+                class_name
+            )
+
 
 

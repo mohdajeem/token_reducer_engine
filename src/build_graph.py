@@ -42,6 +42,8 @@ from utils.logger import (
 from impact_engine.taint_traversal_engine import (TaintTraversalEngine)
 
 import os
+import re
+import json
 import sys
 import json
 from pathlib import Path
@@ -125,6 +127,111 @@ def print_tree(node, indent=0):
         print_tree(child, indent + 1)
 
 
+TEST_DIR_NAMES = {"test", "tests", "__tests__", "spec", "specs", "e2e", "cypress"}
+_TEST_FILE_RE = re.compile(r"(\.|_|-)(test|spec)\.[A-Za-z]+$|^test_.*\.py$|_test\.py$")
+
+_FRAMEWORK_KEYS = {
+    "express": "express", "koa": "koa", "fastify": "fastify", "hapi": "@hapi/hapi",
+    "mongoose": "mongoose", "sequelize": "sequelize", "prisma": "@prisma/client", "typeorm": "typeorm",
+    "knex": "knex", "pg": "pg", "mysql": "mysql", "sqlite": "sqlite3", "mongodb": "mongodb",
+}
+
+_LITERAL_NODE_TYPES = {"string", "template_string", "jsx_text"}
+LITERALS_PER_FILE = 200
+
+
+_JS_LIKE = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
+
+
+def index_tests_for(ext: str) -> bool:
+    """Whether test files of this language join the graph (as the flagged test partition).
+    SEMANTIC_INDEX_TESTS: "1" all languages, "0" none, default "js" -- JavaScript/TypeScript
+    only, where a failing test id is the best pointer to the symbol to change and tests are
+    the callers index for library code. Python keeps the historical behaviour (tests skipped)
+    until build time on sympy/sphinx-sized test trees has been measured."""
+    mode = os.environ.get("SEMANTIC_INDEX_TESTS", "js").strip().lower()
+    if mode in ("1", "true", "all", "yes"):
+        return True
+    if mode in ("0", "false", "none", "no"):
+        return False
+    return ext.lower() in _JS_LIKE
+
+
+def is_test_path(rel_path: str) -> bool:
+    """Test partition: a test directory anywhere in the path, or a test-suffixed file name."""
+    parts = rel_path.replace("\\", "/").split("/")
+    if any(part.lower() in TEST_DIR_NAMES for part in parts[:-1]):
+        return True
+    return bool(_TEST_FILE_RE.search(parts[-1]))
+
+
+def detect_frameworks(directory) -> set:
+    """Frameworks named in the repo's manifests. Express/Mongoose/SQL heuristics in the
+    builder only run when the repo actually uses them."""
+    found = set()
+    for manifest in ("package.json", "requirements.txt", "pyproject.toml", "Pipfile"):
+        path = os.path.join(directory, manifest)
+        if not os.path.isfile(path):
+            continue
+        try:
+            text = open(path, "r", encoding="utf-8", errors="ignore").read()
+        except Exception:
+            continue
+        if manifest == "package.json":
+            try:
+                data = json.loads(text)
+                deps = {}
+                for key in ("dependencies", "devDependencies", "peerDependencies"):
+                    deps.update(data.get(key, {}) or {})
+                for fw, pkg in _FRAMEWORK_KEYS.items():
+                    if pkg in deps:
+                        found.add(fw)
+            except Exception:
+                pass
+        else:
+            low = text.lower()
+            for fw in ("flask", "django", "fastapi", "sqlalchemy", "express"):
+                if fw in low:
+                    found.add(fw)
+    return found
+
+
+def extract_literals(tree, source: bytes, limit: int = LITERALS_PER_FILE) -> list:
+    """User-facing strings in a file (string / template literals, JSX text), deduplicated,
+    4..120 chars, skipping import-like paths. Issues describe bugs in these words far more
+    often than in identifiers ("Store address is required"); this is what lets
+    mcp_find_symbols map an issue sentence to a file."""
+    out, seen = [], set()
+    stack = [tree.root_node]
+    while stack and len(out) < limit:
+        node = stack.pop()
+        if node.type in _LITERAL_NODE_TYPES:
+            raw = source[node.start_byte:node.end_byte].decode("utf-8", "ignore")
+            txt = raw.strip().strip("'\"`").strip()
+            path_like = txt.startswith(("./", "../", "/", "http", "@")) or "/" in txt
+            if 4 <= len(txt) <= 120 and not path_like and (" " in txt or not txt.isidentifier()):
+                if txt not in seen:
+                    seen.add(txt)
+                    out.append(txt)
+            continue
+        stack.extend(reversed(node.children))
+    return out
+
+
+_QUERY_CACHE = {}
+
+
+def _compiled_query(ext):
+    """Compiled tree-sitter master query per extension. Compiling per FILE was 90% of the
+    build time (Chart.js: 48 of 53 s across 665 files); the query text never changes."""
+    q = _QUERY_CACHE.get(ext)
+    if q is None:
+        query_string = langmanager.get_master_query(ext).replace("\r\n", "\n")
+        q = Query(LANG_CONFIG[ext]["LANGUAGE"], query_string)
+        _QUERY_CACHE[ext] = q
+    return q
+
+
 def build_graph(directory):
     global GLOBAL_BUILDER
     # first check SemanticGraph
@@ -133,6 +240,8 @@ def build_graph(directory):
     from semantic_core.semantic_registry import (SemanticRegistry)
 
     registry = SemanticRegistry()
+    frameworks = detect_frameworks(directory)
+    literals = {}
 
 
     for root, dirs, files in os.walk(directory):
@@ -159,79 +268,86 @@ def build_graph(directory):
 
             if not langmanager.is_supported(ext):
                 continue
+            if file.endswith((".min.js", ".min.mjs", ".min.cjs")):
+                continue  # minified output: one-letter classes, no value as context
+            if is_test_path(rel_path) and not index_tests_for(ext):
+                continue
 
             if DEBUG_GRAPH_BUILD:
                 print(f"📄 Parsing: {rel_path}")
 
             try:
-
-                with open(
-                    abs_path,
-                    "r",
-                    encoding="utf-8"
-                ) as f:
+                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
 
+                tree = parse_content(content, ext)
+                query = _compiled_query(ext)
+                cursor = QueryCursor(query)
+                matches = cursor.matches(tree.root_node)
+                from semantic_core.match_extractor_fixed import safe_extract_semantic_matches
+
+                semantic_matches = safe_extract_semantic_matches(matches, rel_path, tree)
+                # a repo that imports express/mongoose/... uses it, manifest or not
+                for sm in semantic_matches:
+                    if sm.match_type == "IMPORT":
+                        src_pkg = (sm.get("import.source") or "").split("/")[0]
+                        for fw, pkg in _FRAMEWORK_KEYS.items():
+                            if src_pkg == pkg or src_pkg == fw:
+                                frameworks.add(fw)
+                if is_test_path(rel_path):
+                    for sm in semantic_matches:
+                        sm.is_test = True
+                registry.add_matches(semantic_matches)
+                lits = extract_literals(tree, bytes(content, "utf-8"))
+                if lits:
+                    literals[rel_path] = lits
             except Exception as e:
-                print(
-                    f"❌ Failed reading {rel_path}: {e}"
-                )
+                print(f"[WARNING] Skipped indexing {rel_path} due to error: {e}")
                 continue
 
-            # ==================================================
-            # PARSE TREE
-            # ==================================================
-
-            tree = parse_content(
-                content,
-                ext
-            )
-
-            # ==================================================
-            # LOAD MASTER QUERY
-            # ==================================================
-
-            query_string = (
-                langmanager.get_master_query(ext)
-            )
-
-            query = Query(
-                LANG_CONFIG[ext]["LANGUAGE"],
-                query_string
-            )
-
-            cursor = QueryCursor(query)
-
-            matches = cursor.matches(tree.root_node)
-            from semantic_core.match_extractor_fixed import safe_extract_semantic_matches
-
-            semantic_matches = (
-                safe_extract_semantic_matches(
-                    matches,
-                    rel_path,
-                    tree
-                )
-            )
-
-            # print("Semantic Match inside build function:", semantic_matches)
-
-            registry.add_matches(
-                semantic_matches
-            )
-
-    # builder = GraphBuilder()
     builder = GraphBuilder()
+    builder.project_root = directory
+    builder.frameworks = frameworks
+    builder.symbol_table.project_root = directory
 
     GLOBAL_BUILDER = builder
 
-    print("="*40)
-    print(registry)
-    print("="*40)
+    graph = builder.build(registry.all_matches)
 
-    graph = builder.build(
-        registry.all_matches
-    )
+    # Build reverse symbol_index (function/class name -> [file_path, ...])
+    symbol_index = {}
+    functions = graph.get("functions", {})
+    for file_path, fns in functions.items():
+        norm_file = file_path.replace("\\", "/")
+        for fn in fns:
+            name = fn.get("name") if isinstance(fn, dict) else fn
+            if name:
+                short_name = name.split(".")[-1]
+                if norm_file not in symbol_index.setdefault(short_name, []):
+                    symbol_index[short_name].append(norm_file)
+                if name != short_name and norm_file not in symbol_index.setdefault(name, []):
+                    symbol_index[name].append(norm_file)
 
+    classes = graph.get("classes", {})
+    for file_path, cls_list in classes.items():
+        norm_file = file_path.replace("\\", "/")
+        for cls in cls_list:
+            name = cls.get("name") if isinstance(cls, dict) else cls
+            if name and norm_file not in symbol_index.setdefault(name, []):
+                symbol_index[name].append(norm_file)
+
+    # Class-qualified entries: "Engine.tick" -> [file]; lets a target spec name the class.
+    for file_path, fns in functions.items():
+        norm_file = file_path.replace("\\", "/")
+        for fn in fns:
+            if isinstance(fn, dict) and fn.get("class") and fn.get("name"):
+                key = f"{fn['class']}.{fn['name']}"
+                if norm_file not in symbol_index.setdefault(key, []):
+                    symbol_index[key].append(norm_file)
+
+    graph["symbol_index"] = symbol_index
+    graph["literals"] = literals
+    graph["frameworks"] = sorted(frameworks)
     return graph
 
 

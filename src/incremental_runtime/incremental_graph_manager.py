@@ -43,9 +43,11 @@ class IncrementalGraphManager:
             match_extractor
         )
 
-        self.snapshot_manager = (
-            SnapshotManager()
+        import os
+        self.snapshot_manager = SnapshotManager(
+            snapshot_dir=os.path.join(project_root, ".semantic_cache")
         )
+
 
         self.change_detector = (
             ChangeDetector()
@@ -97,39 +99,7 @@ class IncrementalGraphManager:
     # ======================================================
 
     def detect_changed_files(self):
-
-        diff_text = (
-
-            self.change_detector
-            .get_git_diff()
-        )
-        print("\nRAW GIT DIFF:")
-        print(diff_text)
-        changes = (
-
-            self.change_detector
-            .extract_changes(
-                diff_text
-            )
-        )
-
-        changed_files = set()
-
-        for change in changes:
-
-            file_path = change.get(
-                "file"
-            )
-
-            if file_path:
-
-                changed_files.add(
-                    file_path
-                )
-
-        return list(
-            changed_files
-        )
+        return self.change_detector.get_changed_files(self.project_root)
 
     # ======================================================
     # REBUILD FILE
@@ -179,17 +149,23 @@ class IncrementalGraphManager:
         # ==================================================
         # EXTRACT MATCHES
         # ==================================================
+        from language_config import LANG_CONFIG
+        from tree_sitter import Parser, Query, QueryCursor
+        from semantic_core.match_extractor_fixed import safe_extract_semantic_matches
 
-        semantic_matches = (
+        ext = os.path.splitext(absolute_path)[1]
+        semantic_matches = []
+        if ext in LANG_CONFIG and os.path.exists(absolute_path):
+            lang = LANG_CONFIG[ext]["LANGUAGE"]
+            parser = Parser(lang)
+            with open(absolute_path, "r", encoding="utf-8", errors="ignore") as f:
+                code = f.read()
+            tree = parser.parse(bytes(code, "utf-8"))
+            from build_graph import _compiled_query
+            query = _compiled_query(ext)
+            raw_matches = QueryCursor(query).matches(tree.root_node)
+            semantic_matches = safe_extract_semantic_matches(raw_matches, file_path, tree)
 
-            self.match_extractor
-            .extract_file(
-
-                self.match_extractor,
-
-                absolute_path
-            )
-        )
 
         # ==================================================
         # REBUILD FILE SEMANTICS

@@ -18,6 +18,13 @@ def classify_match(capture_names):
         return "IMPORT"
 
     # ======================================================
+    # RE-EXPORTS (barrel files)
+    # ======================================================
+
+    if "reexport.source" in capture_set:
+        return "REEXPORT"
+
+    # ======================================================
     # DATABASE
     # ======================================================
 
@@ -85,9 +92,10 @@ def classify_match(capture_names):
     # FUNCTION PARAMETERS
     # ======================================================
 
-    if "param.name" in capture_set:
-
+    if any(k in capture_set for k in ("param.name", "param.destructure_prop", "param.rest", "param.destructure_rest", "param.star_args", "param.kw_args")):
         return "FUNCTION_PARAMS"
+
+
 
     # for function 
     if "function.name" in capture_set:
@@ -99,14 +107,10 @@ def classify_match(capture_names):
     # ======================================================
 
     if (
-
         "assign.variable" in capture_set
-
-        and
-
-        "assign.value" in capture_set
+        or
+        "field.variable" in capture_set
     ):
-
         return "VARIABLE_ASSIGNMENT"
     
     # ======================================================

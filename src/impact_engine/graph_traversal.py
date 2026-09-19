@@ -16,17 +16,23 @@ class GraphTraversal:
         """
         self.graph = graph
         self.edges = graph.get("execution_edges", [])
+        # Test-partition edges (from a test function) are hidden by default: an impact
+        # query answers "what production code depends on this"; tests are surfaced on
+        # request (include_tests=True / mcp_tests_for).
+        self.include_tests = False
 
     # ======================================================
     # FIND UPSTREAM NODES
     # ======================================================
 
-    def find_upstream_nodes(self, target_node):
+    def find_upstream_nodes(self, target_node, max_depth=None, include_types=None, include_tests=None):
         """
-        Performs a backward BFS traversal from the target node to locate all upstream callers.
+        Performs a backward BFS traversal from the target node to locate upstream callers.
         
         Args:
             target_node (Dict): The target function or route node mapping to trace.
+            max_depth (Optional[int]): Maximum traversal depth (number of hops).
+            include_types (Optional[List[str]]): List of edge types to include (e.g. ['FUNCTION_CALL']).
             
         Returns:
             List[Dict]: List of connected edges representing the upstream dependency path.
@@ -34,27 +40,38 @@ class GraphTraversal:
         visited = set()
         queue = deque()
         results = []
-        queue.append(target_node)
+        queue.append((target_node, 0))
 
         while queue:
-            current = queue.popleft()
+            current, depth = queue.popleft()
             current_key = str(current)
             if current_key in visited:
                 continue
 
             visited.add(current_key)
 
+            if max_depth is not None and depth >= max_depth:
+                continue
+
             for edge in self.edges:
+                if include_types and edge["type"] not in include_types:
+                    continue
+                if edge.get("is_test") and not (self.include_tests if include_tests is None else include_tests):
+                    continue
+
                 to_node = edge["to"]
                 from_node = edge["from"]
 
                 if self.node_equals(to_node, current):
-                    results.append({
+                    edge_dict = {
                         "edge_type": edge["type"],
                         "from": from_node,
-                        "to": to_node
-                    })
-                    queue.append(from_node)
+                        "to": to_node,
+                        "depth": depth + 1
+                    }
+                    if edge_dict not in results:
+                        results.append(edge_dict)
+                    queue.append((from_node, depth + 1))
 
         return results
 
@@ -62,12 +79,14 @@ class GraphTraversal:
     # FIND DOWNSTREAM NODES
     # ======================================================
 
-    def find_downstream_nodes(self, target_node):
+    def find_downstream_nodes(self, target_node, max_depth=None, include_types=None, include_tests=None):
         """
-        Performs a forward BFS traversal from the target node to locate all downstream dependents.
+        Performs a forward BFS traversal from the target node to locate downstream dependents.
         
         Args:
             target_node (Dict): The target node to trace forward dependencies from.
+            max_depth (Optional[int]): Maximum traversal depth (number of hops).
+            include_types (Optional[List[str]]): List of edge types to include.
             
         Returns:
             List[Dict]: List of connected edges representing the downstream dependency path.
@@ -75,29 +94,41 @@ class GraphTraversal:
         visited = set()
         queue = deque()
         results = []
-        queue.append(target_node)
+        queue.append((target_node, 0))
 
         while queue:
-            current = queue.popleft()
+            current, depth = queue.popleft()
             current_key = str(current)
             if current_key in visited:
                 continue
 
             visited.add(current_key)
 
+            if max_depth is not None and depth >= max_depth:
+                continue
+
             for edge in self.edges:
+                if include_types and edge["type"] not in include_types:
+                    continue
+                if edge.get("is_test") and not (self.include_tests if include_tests is None else include_tests):
+                    continue
+
                 to_node = edge["to"]
                 from_node = edge["from"]
 
                 if self.node_equals(from_node, current):
-                    results.append({
+                    edge_dict = {
                         "edge_type": edge["type"],
                         "from": from_node,
-                        "to": to_node
-                    })
-                    queue.append(to_node)
+                        "to": to_node,
+                        "depth": depth + 1
+                    }
+                    if edge_dict not in results:
+                        results.append(edge_dict)
+                    queue.append((to_node, depth + 1))
 
         return results
+
 
     # ======================================================
     # FIND ROUTES IMPACTED BY DB MODEL
@@ -156,12 +187,35 @@ class GraphTraversal:
             import os
             file1 = os.path.normpath(str(node1.get("file"))).replace("\\", "/") if node1.get("file") else None
             file2 = os.path.normpath(str(node2.get("file"))).replace("\\", "/") if node2.get("file") else None
-            
-            return (
+
+            base_match = (
                 file1 == file2
                 and
                 node1.get("function") == node2.get("function")
             )
+            if not base_match:
+                return False
+
+            # Same-named methods of two classes in one file (Engine.tick vs Other.tick):
+            # when BOTH sides carry an owning class, it must match. Either side missing it
+            # falls back to the file+name comparison, so this only ever narrows.
+            c1 = node1.get("class")
+            c2 = node2.get("class")
+            if c1 and c2 and c1 != c2:
+                return False
+
+            # Two same-named methods in the SAME file are indistinguishable by file +
+            # name alone. When BOTH sides carry a function_line (the specific
+            # occurrence's own definition line -- see resolve_target_node and
+            # graph_builder.py's edge construction), require it to match too. Either
+            # side missing it (the common case -- most edges don't carry this field)
+            # falls back to exactly today's file+name-only comparison, so this can only
+            # ever narrow an existing match, never break one that worked before.
+            line1 = node1.get("function_line")
+            line2 = node2.get("function_line")
+            if line1 is not None and line2 is not None:
+                return line1 == line2
+            return True
 
         # MIDDLEWARE MATCH
         if (
@@ -198,5 +252,12 @@ class GraphTraversal:
                 and
                 node1.get("method") == node2.get("method")
             )
+
+        # FILE / MODULE MATCH
+        if (node1.get("type") in ("FILE", "MODULE") and node2.get("type") in ("FILE", "MODULE")):
+            import os
+            file1 = os.path.normpath(str(node1.get("file"))).replace("\\", "/") if node1.get("file") else ""
+            file2 = os.path.normpath(str(node2.get("file"))).replace("\\", "/") if node2.get("file") else ""
+            return file1 == file2
 
         return False

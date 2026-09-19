@@ -204,6 +204,9 @@ def _function_body(func_node):
     return func_node.child_by_field_name("body")
 
 
+_OPTIONS_OBJ_RE = _re.compile(r"(^|\.)(options?|opts|config|configuration|settings|defaults|props|params)$")
+
+
 def _first_new_expression(node, depth=0):
     """Constructor name of the first `new X(...)` in an expression subtree (shallow)."""
     if node is None or depth > 4:
@@ -239,6 +242,13 @@ def _this_field_assignments(func_node, param_types):
                     field = _text(prop)
                     if right.type == "identifier" and _text(right) in param_types:
                         out[field] = param_types[_text(right)]
+                    elif right.type == "member_expression" and _OPTIONS_OBJ_RE.search(_text(right.child_by_field_name("object") or right) or ""):
+                        # `this.tokenizer = options.tokenizer`: the type comes from wherever the
+                        # defaults object assigns `tokenizer: new Tokenizer()`; resolved late
+                        # via the builder's option_defaults index
+                        key = right.child_by_field_name("property")
+                        if key is not None:
+                            out[field] = "option:" + _text(key)
                     else:
                         # `new X()` directly, or inside `a || new X()` / `cond ? new X() : y`
                         ctor = _first_new_expression(right)

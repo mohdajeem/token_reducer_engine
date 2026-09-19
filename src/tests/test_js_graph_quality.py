@@ -75,7 +75,37 @@ FIXTURE = {
     "src/other.js": textwrap.dedent("""\
         export class Other {
           tick() { return 'other'; }
+          space() { return 'other-space'; }
         }
+        """),
+    "src/tokenizer.js": textwrap.dedent("""\
+        export class Tokenizer {
+          space(src) { return src.length; }
+        }
+        """),
+    "src/defaults.js": textwrap.dedent("""\
+        import { Tokenizer } from './tokenizer';
+        export function getDefaults() {
+          return { tokenizer: new Tokenizer(), gfm: true };
+        }
+        """),
+    "src/lexer.js": textwrap.dedent("""\
+        import { Engine } from './core';
+        import { Other } from './other';
+        export class Lexer {
+          constructor(options) {
+            this.options = options;
+            this.tokenizer = options.tokenizer;
+          }
+          lex(src) {
+            return this.tokenizer.space(src);
+          }
+        }
+        export function poke(o) {
+          o.tick();
+        }
+        poke(new Engine());
+        poke(new Other());
         """),
     "src/app.js": textwrap.dedent("""\
         import { boot } from './index';
@@ -272,6 +302,18 @@ def main():
     check("TS annotation (svc: Engine) -> svc.tick() resolves to Engine.tick", c is not None and c.get("resolved_class") == "Engine", c)
     uniq_edges = [e for e in graph["execution_edges"] if e["from"].get("function") == "byName" and e["to"].get("function") == "loadStrings"]
     check("name-unique edge carries confidence flag", uniq_edges and uniq_edges[0].get("confidence") == "name-unique", uniq_edges)
+
+    # ---------- 12. cheap inference: option defaults and multi-site candidates
+    lcalls = {(c.get("receiver"), c["function"]): c for c in graph["calls"].get("src/lexer.js", [])}
+    c = lcalls.get(("this.tokenizer", "space"))
+    check("this.tokenizer = options.tokenizer -> typed from defaults `tokenizer: new Tokenizer()` (space is ambiguous otherwise)",
+          c is not None and c.get("resolved_class") == "Tokenizer" and c.get("resolution") == "typed", c)
+    c = lcalls.get(("o", "tick"))
+    check("poke(new Engine()) + poke(new Other()) -> o.tick() resolves to BOTH as candidates",
+          c is not None and c.get("resolution") == "candidates" and {x["class"] for x in c.get("candidates", [])} == {"Engine", "Other"}, c)
+    cand_edges = [e for e in graph["execution_edges"] if e["from"].get("function") == "poke" and e["to"].get("function") == "tick"]
+    check("candidate edges exist for each class and carry confidence=candidates",
+          {e["to"].get("class") for e in cand_edges} == {"Engine", "Other"} and all(e.get("confidence") == "candidates" for e in cand_edges), cand_edges)
 
     # ---------- 6. tests partition
     tf = fn_entries(graph, "test/engine.test.js")

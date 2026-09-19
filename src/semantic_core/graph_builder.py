@@ -79,6 +79,10 @@ class GraphBuilder:
         # heuristics -- routes, DB sinks, req.* taint -- only run when the repo uses them; on a
         # charting library `chart.update()` used to become a DB_ACCESS edge to model "chart".
         self.frameworks = set()
+        # key -> ClassName from `key: new Class()` defaults (set by build_graph)
+        self.option_defaults = {}
+        # (file, function, param) -> [ClassName, ...] when call sites disagree on the type
+        self.param_candidates = {}
         self.symbol_table = SymbolTable()
         self.function_index = (
             FunctionIndex()
@@ -616,8 +620,14 @@ class GraphBuilder:
         imported = self.symbol_table.resolve_import(file_path, class_name)
         if imported:
             exported_as = self.symbol_table.resolve_imported_name(file_path, class_name) or class_name
-            return self._find_class_through_reexports(imported, exported_as)
-        return None
+            found = self._find_class_through_reexports(imported, exported_as)
+            if found:
+                return found
+        # not imported here (came in through options / a factory): the class is still
+        # unambiguous when exactly one non-bundle file in the repo defines it
+        owners = {(f, class_name) for f, cs in self.graph["classes"].items() if class_name in cs}
+        pick = self._unique_owner(owners)
+        return pick[0] if pick else None
 
     def _find_class_through_reexports(self, file_path, class_name, _depth=0):
         if not file_path or _depth > 6:
@@ -645,6 +655,8 @@ class GraphBuilder:
         cls_file = self.resolve_class_file(file_path, class_name) or file_path
         entry = self.graph["classes"].get(cls_file, {}).get(class_name) or {}
         ftype = (entry.get("fields") or {}).get(field)
+        if ftype and ftype.startswith("option:"):
+            ftype = self.option_defaults.get(ftype[7:])
         if ftype:
             return ftype
         if entry.get("superclass"):
@@ -656,21 +668,28 @@ class GraphBuilder:
         Uses the argument->parameter flow the builder already computes."""
         import re as _re
         new_re = _re.compile(r"^\s*new\s+([A-Za-z_$][\w$.]*)\s*\(")
+        seen = {}  # (file, function, param) -> set of types observed across call sites
         for flow in self.graph.get("data_flow", []):
             src = flow.get("source")
             tf, tfn, tp = flow.get("target_file"), flow.get("target_function"), flow.get("target_param")
             if not (isinstance(src, str) and tf and tfn and tp):
                 continue
             if self.symbol_table.resolve_type(tf, tfn, tp):
-                continue  # declared type wins
+                continue  # declared type (JSDoc / TS) wins
+            t = None
             m = new_re.match(src)
             if m:
-                self.symbol_table.register_type(tf, tfn, tp, m.group(1).split(".")[-1])
-                continue
-            if _re.fullmatch(r"[A-Za-z_$][\w$]*", src.strip()) and flow.get("source_file"):
+                t = m.group(1).split(".")[-1]
+            elif _re.fullmatch(r"[A-Za-z_$][\w$]*", src.strip()) and flow.get("source_file"):
                 t = self.symbol_table.resolve_type(flow["source_file"], flow.get("source_function") or "GLOBAL", src.strip())
-                if t:
-                    self.symbol_table.register_type(tf, tfn, tp, t)
+            if t:
+                seen.setdefault((tf, tfn, tp), set()).add(t)
+        # one type across every call site -> a fact; several -> candidates, never a guess
+        for (tf, tfn, tp), types in seen.items():
+            if len(types) == 1:
+                self.symbol_table.register_type(tf, tfn, tp, next(iter(types)))
+            else:
+                self.param_candidates[(tf, tfn, tp)] = sorted(types)
 
     _BUNDLE_RE = None
 
@@ -726,6 +745,31 @@ class GraphBuilder:
                     if t:
                         typed_file, typed_meta = self.resolve_method(file_path, t, func)
                         typed_class, how = t, "typed"
+                    elif (file_path, caller, recv) in self.param_candidates:
+                        # call sites disagree on the parameter's type: resolve to every
+                        # candidate that defines the method, flagged so consumers can weigh it
+                        resolved = []
+                        for cand in self.param_candidates[(file_path, caller, recv)]:
+                            cf, cm = self.resolve_method(file_path, cand, func)
+                            if cm:
+                                resolved.append((cf, cm, cand))
+                        if len(resolved) == 1:
+                            typed_file, typed_meta, typed_class = resolved[0]
+                            how = "typed"
+                        elif resolved:
+                            call.update({"object": "|".join(c for _, _, c in resolved), "resolved_file": resolved[0][0],
+                                         "resolved_function": resolved[0][1], "resolved_class": resolved[0][1].get("class") or resolved[0][2],
+                                         "resolution": "candidates",
+                                         "candidates": [{"file": cf, "class": cm.get("class") or c} for cf, cm, c in resolved]})
+                            from_node = {"type": "FUNCTION", "file": file_path, "function": caller if caller != "GLOBAL" else "GLOBAL_SCOPE"}
+                            if call.get("caller_class"):
+                                from_node["class"] = call["caller_class"]
+                            for cf, cm, c in resolved:
+                                self.add_execution_edge(from_node=dict(from_node),
+                                                        to_node={"type": "FUNCTION", "file": cf, "function": func, "class": cm.get("class") or c},
+                                                        edge_type="FUNCTION_CALL", is_test=bool(call.get("is_test")))
+                                self.graph["execution_edges"][-1]["confidence"] = "candidates"
+                            continue
                 if not typed_meta and "(" not in recv and "[" not in recv:
                     # unique-name fallback also covers `this.tokenizer.space()` when the
                     # field's type is unknown but only one class defines `space`

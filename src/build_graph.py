@@ -157,6 +157,15 @@ def index_tests_for(ext: str) -> bool:
     return ext.lower() in _JS_LIKE
 
 
+_BUNDLE_PATH_RE = re.compile(r"(^|/)(lib|dist|build|bundle|umd|esm|cjs|min)(/|$)|[.](min|esm|umd|cjs|bundle)[.][cm]?js$")
+
+
+def is_bundle_path(rel_path: str) -> bool:
+    """Built output that copies the source (lib/marked.esm.js next to src/); bundlers rename
+    classes (Tokenizer$1), so bundles must not vote on repo-wide facts like defaults."""
+    return bool(_BUNDLE_PATH_RE.search(rel_path.replace("\\", "/")))
+
+
 def is_test_path(rel_path: str) -> bool:
     """Test partition: a test directory anywhere in the path, or a test-suffixed file name."""
     parts = rel_path.replace("\\", "/").split("/")
@@ -232,6 +241,51 @@ def _compiled_query(ext):
     return q
 
 
+def _first_new_ctor(node, source: bytes, depth: int = 0):
+    """Constructor name of the first `new X()` in a shallow expression subtree (`a || new X()`)."""
+    if node is None or depth > 4:
+        return None
+    if node.type == "new_expression":
+        ctor = node.child_by_field_name("constructor")
+        return source[ctor.start_byte:ctor.end_byte].decode("utf-8", "ignore").split(".")[-1] if ctor is not None else None
+    if node.type in ("arrow_function", "function_expression", "call_expression", "object", "array"):
+        return None
+    for ch in node.named_children:
+        r = _first_new_ctor(ch, source, depth + 1)
+        if r:
+            return r
+    return None
+
+
+def extract_option_defaults(tree, source: bytes) -> dict:
+    """{key: ClassName} for `key: new Class()` in object literals and `.key = new Class()`
+    assignments -- the defaults that later flow into `this.key = options.key`."""
+    out = {}
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        if node.type == "pair":
+            key = node.child_by_field_name("key"); val = node.child_by_field_name("value")
+            if key is not None and val is not None and val.type == "new_expression":
+                ctor = val.child_by_field_name("constructor")
+                if ctor is not None:
+                    out.setdefault(source[key.start_byte:key.end_byte].decode("utf-8", "ignore").strip("'\""),
+                                   source[ctor.start_byte:ctor.end_byte].decode("utf-8", "ignore").split(".")[-1])
+        elif node.type == "assignment_expression":
+            left = node.child_by_field_name("left"); right = node.child_by_field_name("right")
+            if left is not None and right is not None and left.type == "member_expression":
+                prop = left.child_by_field_name("property")
+                objtxt = source[left.start_byte:left.end_byte].decode("utf-8", "ignore")
+                # `defaults.tokenizer = new Tokenizer()` and `this.options.tokenizer = x || new
+                # Tokenizer()` are defaults; a plain `this.field = new X()` is a field, not one
+                is_plain_field = objtxt.startswith("this.") and objtxt.count(".") == 1
+                ctor = _first_new_ctor(right, source)
+                if prop is not None and ctor and not is_plain_field:
+                    out.setdefault(source[prop.start_byte:prop.end_byte].decode("utf-8", "ignore"), ctor)
+        stack.extend(node.children)
+    return out
+
+
 def build_graph(directory):
     global GLOBAL_BUILDER
     # first check SemanticGraph
@@ -242,6 +296,8 @@ def build_graph(directory):
     registry = SemanticRegistry()
     frameworks = detect_frameworks(directory)
     literals = {}
+    option_defaults = {}
+    option_conflicts = set()
 
 
     for root, dirs, files in os.walk(directory):
@@ -301,6 +357,11 @@ def build_graph(directory):
                 lits = extract_literals(tree, bytes(content, "utf-8"))
                 if lits:
                     literals[rel_path] = lits
+                if not is_test_path(rel_path) and not is_bundle_path(rel_path):
+                    for k, t in extract_option_defaults(tree, bytes(content, "utf-8")).items():
+                        if k in option_defaults and option_defaults[k] != t:
+                            option_conflicts.add(k)
+                        option_defaults.setdefault(k, t)
             except Exception as e:
                 print(f"[WARNING] Skipped indexing {rel_path} due to error: {e}")
                 continue
@@ -309,6 +370,8 @@ def build_graph(directory):
     builder.project_root = directory
     builder.frameworks = frameworks
     builder.symbol_table.project_root = directory
+    # a key given different classes in different places is not a usable default
+    builder.option_defaults = {k: t for k, t in option_defaults.items() if k not in option_conflicts}
 
     GLOBAL_BUILDER = builder
 

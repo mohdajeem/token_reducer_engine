@@ -132,17 +132,27 @@ class ChangeDetector:
         except Exception:
             return None
 
-    def get_changed_files(self, repo_path):
+    def get_changed_files(self, repo_path, cache_dir=None, commit=True, baseline=None):
+        """Files changed since `baseline` (the hashes describing the graph in memory), or
+        since the committed hash file when no baseline is given (cold start: the file
+        describes the snapshot on disk). cache_dir must be the directory the snapshot lives
+        in (default <repo>/.semantic_cache). commit=False leaves the new hashes for
+        committer(): the server writes them only once the matching snapshot is on disk, so
+        a crash between the two can never leave "no changes" hashes next to an older graph.
+        The new hashes are always in self.last_hashes for the caller to keep as the next
+        baseline."""
         import json
         repo_path = os.path.abspath(repo_path)
         changed_files = set()
 
-        cache_dir = os.path.join(repo_path, ".semantic_cache")
+        cache_dir = cache_dir or os.path.join(repo_path, ".semantic_cache")
         os.makedirs(cache_dir, exist_ok=True)
         hash_file = os.path.join(cache_dir, "file_hashes.json")
 
         old_hashes = {}
-        if os.path.exists(hash_file):
+        if baseline is not None:
+            old_hashes = baseline
+        elif os.path.exists(hash_file):
             try:
                 with open(hash_file, "r", encoding="utf-8") as f:
                     old_hashes = json.load(f)
@@ -182,11 +192,25 @@ class ChangeDetector:
             if rel_p not in seen:
                 changed_files.add(rel_p)
 
-        # Save updated hashes
-        try:
-            with open(hash_file, "w", encoding="utf-8") as f:
-                json.dump(new_hashes, f, separators=(",", ":"))
-        except Exception:
-            pass
-
+        self.last_hashes = new_hashes
+        self._pending = (hash_file, new_hashes)
+        if commit:
+            self.committer()()
         return list(changed_files)
+
+    def committer(self):
+        """A callable that persists the hashes of the LAST get_changed_files call. Bound
+        now, not when called: a background snapshot writer finishing late must commit the
+        hashes of its own graph, not of a newer detection that ran meanwhile."""
+        import json
+        hash_file, new_hashes = self._pending
+
+        def commit():
+            try:
+                tmp = hash_file + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(new_hashes, f, separators=(",", ":"))
+                os.replace(tmp, hash_file)
+            except Exception:
+                pass
+        return commit

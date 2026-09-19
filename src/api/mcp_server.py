@@ -49,6 +49,8 @@ SERVER_STATE = {
     # the GraphBuilder that built `graph` (symbol table, function index, option defaults):
     # incremental updates need it to resolve cross-file exactly like the original build
     "builder": None,
+    # file hashes describing `graph` (the on-disk hash file may lag a background write)
+    "hashes": None,
     "lock": threading.Lock(),
     "watcher": None
 }
@@ -73,7 +75,8 @@ def mcp_build_graph(repo_path: str, force_rebuild: bool = False, watch: bool = F
     if not os.path.isdir(repo_path):
         return f"Error: Repository path '{repo_path}' is not a valid directory."
         
-    with SERVER_STATE["lock"]:
+    from incremental_runtime.snapshot_manager import writers_paused
+    with SERVER_STATE["lock"], writers_paused():
         # Stop existing watcher if active
         if SERVER_STATE.get("watcher"):
             try:
@@ -113,7 +116,12 @@ def mcp_build_graph(repo_path: str, force_rebuild: bool = False, watch: bool = F
                     with redirect_stdout_to_stderr():
                         cached_graph = snapshot_mgr.load_snapshot("graph")
                 if cached_graph:
-                    changed_files = change_detector.get_changed_files(repo_path)
+                    # live: compare against the hashes of the graph in memory (the on-disk
+                    # hash file may lag behind a background snapshot write). The file is
+                    # committed only once the snapshot it describes is on disk.
+                    baseline = SERVER_STATE.get("hashes") if live else None
+                    changed_files = change_detector.get_changed_files(repo_path, cache_dir=cache_dir, commit=False, baseline=baseline)
+                    SERVER_STATE["hashes"] = change_detector.last_hashes
                     if changed_files:
                         # a live builder for THIS repo, else one restored from the snapshot;
                         # a snapshot without builder state cannot be updated correctly -> rebuild
@@ -124,17 +132,24 @@ def mcp_build_graph(repo_path: str, force_rebuild: bool = False, watch: bool = F
                         if builder is not None:
                             rebuild_incrementally = True
                             print(f"Incrementally updating {len(changed_files)} changed files for: {repo_path}...", file=sys.stderr)
+                            # a background write may still be reading this graph: abort it,
+                            # the update below writes a newer one
+                            snapshot_mgr.wait("graph", cancel=True)
                             with redirect_stdout_to_stderr():
                                 from incremental_runtime.incremental_update import apply_update
                                 apply_update(builder, cached_graph, repo_path, changed_files)
                             graph = cached_graph
                             SERVER_STATE["builder"] = builder
-                            snapshot_mgr.save_snapshot(graph, "graph")
+                            # the 27 MB astropy snapshot takes ~0.4 s to serialize + write:
+                            # do it while the model thinks, not inside this call
+                            snapshot_mgr.save_snapshot(graph, "graph", background=True, on_done=change_detector.committer())
                         else:
                             print(f"Snapshot has no builder state; rebuilding {repo_path} in full.", file=sys.stderr)
                     else:
                         graph = cached_graph
                         loaded_from_cache = True
+                        if not snapshot_mgr.writing("graph"):
+                            change_detector.committer()()  # nothing changed: only mtime stamps refreshed
                         if not live:
                             from build_graph import restore_builder
                             SERVER_STATE["builder"] = restore_builder(graph, repo_path)
@@ -150,9 +165,11 @@ def mcp_build_graph(repo_path: str, force_rebuild: bool = False, watch: bool = F
                     graph = build_graph(repo_path)
                     import build_graph as _bg
                     SERVER_STATE["builder"] = _bg.GLOBAL_BUILDER
-                    # Save cache and initial hashes
-                    snapshot_mgr.save_snapshot(graph, "graph")
-                    change_detector.get_changed_files(repo_path)
+                    # Save cache and initial hashes (snapshot written in the background; the
+                    # hashes land only after it)
+                    change_detector.get_changed_files(repo_path, cache_dir=cache_dir, commit=False)
+                    SERVER_STATE["hashes"] = change_detector.last_hashes
+                    snapshot_mgr.save_snapshot(graph, "graph", background=True, on_done=change_detector.committer())
             except Exception as e:
                 return f"Error building graph: {e}"
 

@@ -123,6 +123,15 @@ def main():
         full = observable(build_graph(str(root)))
     check("cold start: incremental graph == full rebuild", inc == full, diff_report(inc, full))
 
+    # ---- 4b. back-to-back updates: the second must wait for the first's background write
+    for i in range(3):
+        p.write_text(p.read_text(encoding="utf-8") + "\n// b%d\n" % i, encoding="utf-8")
+        build(False)
+    inc = observable(srv.SERVER_STATE["graph"])
+    with contextlib.redirect_stdout(q):
+        full = observable(build_graph(str(root)))
+    check("back-to-back edits (writer racing the next update): incremental == full", inc == full, diff_report(inc, full))
+
     # ---- 5. no change -> cached load, no rebuild
     t0 = time.time(); msg = build(False); reload_secs = time.time() - t0
     check("no change: cached load", "cached" in msg.lower(), msg[:120])
@@ -130,11 +139,45 @@ def main():
     # ---- 6. old snapshot without builder state -> full rebuild, not a degraded update
     snap = root / ".semantic_cache" / "inc" / "graph.json"
     import json
+    from incremental_runtime.snapshot_manager import SnapshotManager
+    # snapshots are written on a background thread: anything reading the file must wait
+    SnapshotManager(str(snap.parent)).wait()
+    check("background snapshot write landed with the builder state", "_builder" in json.loads(snap.read_text(encoding="utf-8")))
     g = json.loads(snap.read_text(encoding="utf-8")); g.pop("_builder", None); snap.write_text(json.dumps(g), encoding="utf-8")
     srv.SERVER_STATE["builder"] = None; srv.SERVER_STATE["repo_path"] = None
     p.write_text(p.read_text(encoding="utf-8") + "\n// touch\n", encoding="utf-8")
     msg = build(False)
     check("snapshot without builder state falls back to a FULL build", "compiled" in msg.lower(), msg[:120])
+
+    # ---- 7. crash between the in-memory update and the snapshot landing on disk: the file
+    # hashes must not claim "up to date" next to the older snapshot. Next start must
+    # re-apply the edit, not trust it.
+    import incremental_runtime.snapshot_manager as smod
+    SnapshotManager(str(snap.parent)).wait()
+    hashes_before = (snap.parent / "file_hashes.json").read_bytes()
+    orig = smod._serialize_and_write
+    def crash(path, graph, chunked=False, cancel=None, on_done=None):
+        raise RuntimeError("simulated crash before the snapshot was written")
+    smod._serialize_and_write = crash
+    import threading
+    quiet = threading.excepthook; threading.excepthook = lambda args: None  # the simulated crash is expected
+    p.write_text(p.read_text(encoding="utf-8").replace("  tick() { helper(); return this.n++; }", "  tick() { helper(); helper(); return this.n++; }"), encoding="utf-8")
+    try:
+        build(False)
+    finally:
+        SnapshotManager(str(snap.parent)).wait()
+        smod._serialize_and_write = orig
+        threading.excepthook = quiet
+    check("hashes are NOT committed when the snapshot write failed", (snap.parent / "file_hashes.json").read_bytes() == hashes_before)
+    check("hashes live next to the snapshot (per cache_subdir)", (snap.parent / "file_hashes.json").is_file())
+    srv.SERVER_STATE["builder"] = None; srv.SERVER_STATE["graph"] = None; srv.SERVER_STATE["repo_path"] = None
+    msg = build(False)
+    check("next start re-applies the lost edit incrementally", "incrementally" in msg.lower(), msg[:120])
+    inc = observable(srv.SERVER_STATE["graph"])
+    with contextlib.redirect_stdout(q):
+        full = observable(build_graph(str(root)))
+    check("after crash recovery: incremental == full", inc == full, diff_report(inc, full))
+    SnapshotManager(str(snap.parent)).wait()
 
     shutil.rmtree(root, ignore_errors=True)
     print(f"\n(timing on fixture: incremental {inc_secs:.2f}s, no-change reload {reload_secs:.2f}s)")

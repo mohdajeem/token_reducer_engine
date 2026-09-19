@@ -103,26 +103,31 @@ def mcp_build_graph(repo_path: str, force_rebuild: bool = False, watch: bool = F
 
         if not force_rebuild:
             try:
-                with redirect_stdout_to_stderr():
-                    cached_graph = snapshot_mgr.load_snapshot("graph")
+                # the graph already in memory for THIS repo is the snapshot's content (or
+                # newer): don't re-read 27 MB of JSON on every tool call just to get it back
+                live = SERVER_STATE.get("repo_path") == repo_path and SERVER_STATE.get("graph") is not None                     and SERVER_STATE.get("builder") is not None and snapshot_mgr.has_snapshot("graph")
+                cached_graph = None
+                if live:
+                    cached_graph = SERVER_STATE["graph"]
+                else:
+                    with redirect_stdout_to_stderr():
+                        cached_graph = snapshot_mgr.load_snapshot("graph")
                 if cached_graph:
                     changed_files = change_detector.get_changed_files(repo_path)
                     if changed_files:
                         # a live builder for THIS repo, else one restored from the snapshot;
                         # a snapshot without builder state cannot be updated correctly -> rebuild
-                        builder = SERVER_STATE.get("builder") if SERVER_STATE.get("repo_path") == repo_path else None
-                        live_graph = SERVER_STATE.get("graph") if builder is not None else None
+                        builder = SERVER_STATE.get("builder") if live else None
                         if builder is None:
                             from build_graph import restore_builder
                             builder = restore_builder(cached_graph, repo_path)
-                            live_graph = cached_graph if builder is not None else None
                         if builder is not None:
                             rebuild_incrementally = True
                             print(f"Incrementally updating {len(changed_files)} changed files for: {repo_path}...", file=sys.stderr)
                             with redirect_stdout_to_stderr():
                                 from incremental_runtime.incremental_update import apply_update
-                                apply_update(builder, live_graph, repo_path, changed_files)
-                            graph = live_graph
+                                apply_update(builder, cached_graph, repo_path, changed_files)
+                            graph = cached_graph
                             SERVER_STATE["builder"] = builder
                             snapshot_mgr.save_snapshot(graph, "graph")
                         else:
@@ -130,7 +135,7 @@ def mcp_build_graph(repo_path: str, force_rebuild: bool = False, watch: bool = F
                     else:
                         graph = cached_graph
                         loaded_from_cache = True
-                        if SERVER_STATE.get("repo_path") != repo_path or SERVER_STATE.get("builder") is None:
+                        if not live:
                             from build_graph import restore_builder
                             SERVER_STATE["builder"] = restore_builder(graph, repo_path)
             except Exception as e:

@@ -35,6 +35,9 @@ class SnapshotManager:
     # LOAD SNAPSHOT
     # ======================================================
 
+    def has_snapshot(self, snapshot_name="latest"):
+        return os.path.isfile(os.path.join(self.snapshot_dir, f"{snapshot_name}.json"))
+
     def load_snapshot(self, snapshot_name="latest"):
         path = os.path.join(
             self.snapshot_dir,

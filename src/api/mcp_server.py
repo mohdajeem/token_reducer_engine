@@ -758,6 +758,124 @@ def impact_completeness(graph, target_node, upstream, downstream, include_tests=
     return out
 
 # ==========================================================
+# SKELETON VIEW -- signatures + docs first, bodies on demand
+# ==========================================================
+_DOC_START_RE = re.compile(r"^\s*(/\*\*|\"\"\"|'''|#|//|\*)")
+
+
+def _first_doc_line(lines, start_idx, python: bool):
+    """One-line summary from the doc attached to a definition: the first sentence of the
+    `/** ... */` (or `//`) block directly above it, or of a Python docstring directly below."""
+    if python:
+        j = start_idx + 1
+        while j < len(lines) and j < start_idx + 4:
+            t = lines[j].strip()
+            if t.startswith(("\"\"\"", "'''")):
+                inner = t.strip("\"'").strip()
+                if not inner and j + 1 < len(lines):
+                    inner = lines[j + 1].strip().strip("\"'").strip()
+                return inner[:140]
+            if t and not t.startswith(("@", "#")) and not t.endswith(":"):
+                return ""
+            j += 1
+        return ""
+    j = start_idx - 1
+    while j >= 0 and not lines[j].strip():
+        j -= 1
+    if j < 0:
+        return ""
+    t = lines[j].strip()
+    if t.endswith("*/"):
+        # walk up to the start of the comment block, then take its first text line
+        k = j
+        while k >= 0 and "/*" not in lines[k]:
+            k -= 1
+        for m in range(max(k, 0), j + 1):
+            txt = lines[m].strip().lstrip("/*").strip(" *").strip()
+            if txt.endswith("*/"):
+                txt = txt[:-2].rstrip(" *").strip()
+            if txt and not txt.startswith("@"):
+                return txt[:140]
+        return ""
+    if t.startswith("//"):
+        return t.lstrip("/ ").strip()[:140]
+    return ""
+
+
+def _signature_lines(lines, start_idx, python: bool, max_lines: int = 3):
+    """The definition header: from the start line to the line that opens the body."""
+    out = []
+    for j in range(start_idx, min(len(lines), start_idx + max_lines)):
+        out.append(lines[j].rstrip())
+        t = lines[j].rstrip()
+        if (python and t.endswith(":")) or (not python and ("{" in t or t.endswith("=>") or t.endswith(";"))):
+            break
+    sig = " ".join(x.strip() for x in out)
+    return sig[:200]
+
+
+@mcp.tool()
+def mcp_skeleton(file_path: str, max_symbols: int = 120, keywords: Optional[List[str]] = None) -> dict:
+    """
+    A compressed view of one file: every function / method / class with its signature line,
+    a one-line doc summary, and its line span -- grouped by class, in source order. Roughly
+    3-8% of the tokens of the file itself. Read this first; then mcp_expand_signature /
+    expand_symbol only the bodies you need. `keywords` marks symbols whose span contains a
+    keyword (so the caller can see where an issue's terms land without reading bodies).
+
+    Args:
+        file_path: Repo-relative path.
+        max_symbols: Cap on listed symbols (largest files first get truncated, with a note).
+        keywords: Optional words to flag inside symbol bodies.
+    """
+    with SERVER_STATE["lock"]:
+        graph = SERVER_STATE.get("graph")
+        repo_path = SERVER_STATE.get("repo_path")
+    if not graph or not repo_path:
+        return {"error": "Graph is not built yet. Please call mcp_build_graph(repo_path) first."}
+    rel = file_path.replace("\\", "/")
+    fns = None
+    for f, entries in (graph.get("functions") or {}).items():
+        if f == rel or f.endswith("/" + rel) or rel.endswith("/" + f):
+            fns, rel = entries, f
+            break
+    full = os.path.join(repo_path, rel)
+    if fns is None or not os.path.isfile(full):
+        return {"error": f"{file_path!r} is not an indexed source file."}
+    try:
+        lines = open(full, encoding="utf-8", errors="replace").read().split("\n")
+    except Exception as e:
+        return {"error": str(e)}
+    python = rel.endswith(".py")
+    kws = list(dict.fromkeys(k.lower() for k in (keywords or []) if k))
+    items = []
+    for fn in sorted((x for x in fns if isinstance(x, dict) and x.get("start_line")), key=lambda x: x["start_line"]):
+        i = fn["start_line"] - 1
+        if i >= len(lines):
+            continue
+        body = "\n".join(lines[i:fn.get("end_line") or i + 1]).lower() if kws else ""
+        items.append({
+            "symbol": (fn["class"] + "." if fn.get("class") else "") + fn["name"],
+            "kind": fn.get("kind") or ("method" if fn.get("class") else "function"),
+            "lines": [fn["start_line"], fn.get("end_line") or fn["start_line"]],
+            "signature": _signature_lines(lines, i, python),
+            "doc": _first_doc_line(lines, i, python),
+            **({"static": True} if fn.get("static") else {}),
+            **({"is_test": True} if fn.get("is_test") else {}),
+            **({"keyword_hits": [k for k in kws if k in body]} if kws else {}),
+        })
+    truncated = len(items) > max_symbols
+    items = items[:max_symbols]
+    text_lines = [f"# {rel}  ({len(lines)} lines, {len(items)} symbols{', truncated' if truncated else ''})"]
+    for it in items:
+        flag = ""
+        if it.get("keyword_hits"):
+            flag = "  <-- " + ", ".join(it["keyword_hits"])
+        doc = f"  // {it['doc']}" if it["doc"] else ""
+        text_lines.append(f"L{it['lines'][0]}-{it['lines'][1]}  {it['signature']}{doc}{flag}")
+    return {"file": rel, "symbols": items, "truncated": truncated, "text": "\n".join(text_lines)}
+
+# ==========================================================
 # DISCOVERY TOOLS -- symbol / literal search and neighbourhoods
 # ==========================================================
 _CAMEL_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")

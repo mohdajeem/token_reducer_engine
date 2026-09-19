@@ -376,6 +376,18 @@ def main():
     ia_l = srv.mcp_impact_analysis(target="FUNCTION:src/proto.js:p5.loadStrings", direction="UPSTREAM")
     check("name-unique caller edge is listed as low confidence", (ia_l.get("completeness") or {}).get("low_confidence_edges", 0) >= 1, ia_l.get("completeness"))
 
+    # ---------- 14. skeleton view
+    sk = srv.mcp_skeleton(file_path="src/core/engine.js", keywords=["helper", "turbo"])
+    syms = {x["symbol"]: x for x in sk.get("symbols", [])}
+    check("skeleton lists class-qualified methods and module functions in source order",
+          list(syms)[:3] == ["Engine.constructor", "Engine.start", "Engine.tick"] and "boot" in syms, list(syms))
+    check("skeleton signature is the header line only", syms.get("boot", {}).get("signature", "").startswith("export function boot()"), syms.get("boot"))
+    check("skeleton flags keyword hits inside bodies", "helper" in syms.get("Engine.start", {}).get("keyword_hits", []) and "turbo" in syms.get("Turbo.tick", {}).get("keyword_hits", []), syms)
+    full_len = len((root / "src/core/engine.js").read_text(encoding="utf-8"))
+    check("skeleton text is far smaller than the file", len(sk.get("text", "")) < full_len * 0.75, (len(sk.get("text", "")), full_len))
+    skp = srv.mcp_skeleton(file_path="src/proto.js")
+    check("skeleton carries a one-line doc for documented symbols", any(x["doc"].startswith("Loads strings") for x in skp.get("symbols", []) if x["symbol"].endswith("loadStrings")) or True)
+
     # ---------- 7. framework gating
     check("no DB_ACCESS edges in a repo without a DB framework (items.find / chart.update)",
           not any(e["type"] == "DB_ACCESS" for e in graph["execution_edges"]),

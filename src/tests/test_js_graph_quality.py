@@ -172,6 +172,19 @@ FIXTURE = {
           return n;
         }
         """),
+    # a class whose `register` is attached dynamically (Chart.js does this with
+    # Object.defineProperties): the engine cannot see it, and must not guess another class's
+    "src/chart.js": textwrap.dedent("""\
+        class Chart { constructor() { this.n = 0; } }
+        Object.defineProperties(Chart, { register: { value: (...items) => items.length } });
+        export default Chart;
+        """),
+    "src/registry.js": "export class TypedRegistry { register(item) { return item; } reset() { return 0; } }\n",
+    "src/setup.js": textwrap.dedent("""\
+        import Chart from './chart';
+        Chart.register(1, 2);
+        Chart.reset();
+        """),
     "test/engine.test.js": textwrap.dedent("""\
         import { boot } from '../src/index';
         describe('boot', () => {
@@ -375,6 +388,23 @@ def main():
     check("helper (every call resolved) reports 'complete'", (ia_h.get("completeness") or {}).get("verdict") == "complete", ia_h.get("completeness"))
     ia_l = srv.mcp_impact_analysis(target="FUNCTION:src/proto.js:p5.loadStrings", direction="UPSTREAM")
     check("name-unique caller edge is listed as low confidence", (ia_l.get("completeness") or {}).get("low_confidence_edges", 0) >= 1, ia_l.get("completeness"))
+
+    # ---------- 15. precision: defineProperties members, known class without the method, one edge per call
+    ch = {f["name"]: f for f in fn_entries(graph, "src/chart.js")}
+    check("Object.defineProperties(Chart, {register: {value: fn}}) is captured as static Chart.register (not a function named `value`)",
+          ch.get("register", {}).get("class") == "Chart" and ch["register"].get("static") and "value" not in ch, ch)
+    c = next((c for c in graph["calls"].get("src/setup.js", []) if c.get("function") == "register"), None)
+    check("Chart.register() resolves to that static member", c is not None and c.get("resolved_class") == "Chart" and c.get("resolved_file") == "src/chart.js", c)
+    c = next((c for c in graph["calls"].get("src/setup.js", []) if c.get("function") == "reset"), None)
+    check("Chart.reset() (Chart is a known class with no `reset`) is NOT resolved to TypedRegistry.reset by the unique-name fallback",
+          c is not None and c.get("resolved_class") != "TypedRegistry" and not c.get("resolved_function"), c)
+    reg_edges = [e for e in graph["execution_edges"] if e["from"]["file"] == "src/setup.js" and e["to"].get("function") == "register"]
+    check("one call -> one edge (no leftover import-resolved edge next to a re-resolved one)",
+          len(reg_edges) == 1 and reg_edges[0]["to"]["file"] == "src/chart.js" and reg_edges[0]["to"].get("class") == "Chart", reg_edges)
+    import collections
+    per_call = collections.Counter(e.get("call_id") for e in graph["execution_edges"] if e.get("call_id") and e.get("confidence") != "candidates")
+    check("no call_id has more than one edge anywhere in the fixture graph", all(v == 1 for v in per_call.values()),
+          [k for k, v in per_call.items() if v > 1])
 
     # ---------- 14. skeleton view
     sk = srv.mcp_skeleton(file_path="src/core/engine.js", keywords=["helper", "turbo"])

@@ -835,6 +835,9 @@ class GraphBuilder:
                 if not isinstance(fn, dict) or not fn.get("class") or fn.get("is_test"):
                     continue
                 owners.setdefault(fn["name"], set()).add((file, fn["class"]))
+        edges = self.graph["execution_edges"]
+        first_new_edge = len(edges)
+        replaced = set()  # call_ids re-resolved in this pass: their earlier edges go
         for file_path, calls in self.graph["calls"].items():
             # local aliases of imports that reach NO project file: `import * as R from 'ramda'`,
             # `const fs = require('fs')`, `import json`, `from os import path`
@@ -883,12 +886,19 @@ class GraphBuilder:
                             from_node = {"type": "FUNCTION", "file": file_path, "function": caller if caller != "GLOBAL" else "GLOBAL_SCOPE"}
                             if call.get("caller_class"):
                                 from_node["class"] = call["caller_class"]
+                            if call.get("call_id"):
+                                replaced.add(call["call_id"])
                             for cf, cm, c in resolved:
                                 self.add_execution_edge(from_node=dict(from_node),
                                                         to_node={"type": "FUNCTION", "file": cf, "function": func, "class": cm.get("class") or c},
-                                                        edge_type="FUNCTION_CALL", is_test=bool(call.get("is_test")))
+                                                        edge_type="FUNCTION_CALL", is_test=bool(call.get("is_test")), call_id=call.get("call_id"))
                                 self.graph["execution_edges"][-1]["confidence"] = "candidates"
                             continue
+                if not typed_meta and root[:1].isupper() and root == recv and self.resolve_class_file(file_path, root):
+                    # the receiver IS a project class we know, and it has no such method
+                    # (defined dynamically, e.g. Object.defineProperties(Chart, {register}));
+                    # guessing another class's `register` would be wrong, so stay unresolved
+                    continue
                 if not typed_meta and "(" not in recv and "[" not in recv and func not in self.builtin_method_names():
                     # unique-name fallback also covers `this.tokenizer.space()` when the
                     # field's type is unknown but only one class defines `space`; never for
@@ -910,13 +920,20 @@ class GraphBuilder:
                 if call.get("caller_class"):
                     from_node["class"] = call["caller_class"]
                 is_test = bool(call.get("is_test"))
+                if call.get("call_id"):
+                    replaced.add(call["call_id"])
                 self.add_execution_edge(
                     from_node=from_node,
                     to_node={"type": "FUNCTION", "file": typed_file, "function": func, "class": typed_meta.get("class") or typed_class},
-                    edge_type="FUNCTION_CALL", is_test=is_test,
+                    edge_type="FUNCTION_CALL", is_test=is_test, call_id=call.get("call_id"),
                 )
                 if how == "name-unique":
                     self.graph["execution_edges"][-1]["confidence"] = "name-unique"
+        if replaced:
+            # drop the edges those calls had before (import-resolved to a file without the
+            # function): one call, one edge
+            self.graph["execution_edges"] = [e for i, e in enumerate(edges)
+                                             if i >= first_new_edge or e.get("call_id") not in replaced]
 
     def resolve_method(self, file_path, class_name, method, _depth=0, _want_static=False):
         """(file, metadata) for class_name.method, walking the superclass chain. _want_static:
@@ -1404,6 +1421,7 @@ class GraphBuilder:
                          "class": typed_meta.get("class") or typed_class},
                 edge_type="FUNCTION_CALL",
                 is_test=getattr(sm, "is_test", False),
+                call_id=call_id,
             )
             return
 
@@ -1607,6 +1625,7 @@ class GraphBuilder:
                 to_node=to_node,
                 edge_type="FUNCTION_CALL",
                 is_test=getattr(sm, "is_test", False),
+                call_id=self.graph["calls"][sm.file_path][-1].get("call_id"),
             )
 
     def _from_node(self, sm):
@@ -1788,12 +1807,17 @@ class GraphBuilder:
         to_node,
         edge_type,
         is_test=False,
+        call_id=None,
     ):
         edge = {
             "from": from_node,
             "to": to_node,
             "type": edge_type
         }
+        if call_id:
+            # the call this edge came from: a later pass that re-resolves the call replaces
+            # the edge instead of adding a second, contradictory one
+            edge["call_id"] = call_id
         if is_test:
             # Test-partition edges are kept but hidden from default traversal (see
             # GraphTraversal); `mcp_tests_for` / include_tests=True surface them.

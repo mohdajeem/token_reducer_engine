@@ -141,6 +141,50 @@ def find_owner_class(func_node):
     return None, None
 
 
+def _define_property_member(func_node):
+    """`Object.defineProperties(X, { name: { value: fn } })` and
+    `Object.defineProperty(X, 'name', { value: fn })` attach `name` to X (static when X is
+    the class itself, instance when X.prototype). Chart.js defines Chart.register /
+    Chart.getChart this way. Returns (name, class, is_static) or None."""
+    pair = func_node if func_node is not None and func_node.type == "pair" else (func_node.parent if func_node is not None else None)
+    if pair is None or pair.type != "pair":
+        return None
+    key = pair.child_by_field_name("key")
+    if key is None or _text(key) not in ("value", "get", "set"):
+        return None
+    desc = pair.parent  # the descriptor object { enumerable, value: fn }
+    if desc is None or desc.type != "object":
+        return None
+    holder = desc.parent
+    name = None
+    if holder is not None and holder.type == "pair":  # defineProperties: name: { value }
+        k = holder.child_by_field_name("key")
+        name = _text(k) if k is not None else None
+        props = holder.parent
+        args = props.parent if props is not None and props.type == "object" else None
+    else:  # defineProperty: 'name', { value }
+        args = holder
+    if args is None or args.type != "arguments" or args.parent is None or args.parent.type != "call_expression":
+        return None
+    fn = args.parent.child_by_field_name("function")
+    callee = _text(fn) if fn is not None else ""
+    named = list(args.named_children)
+    if callee == "Object.defineProperty" and len(named) >= 3 and named[1].type == "string":
+        frag = [c for c in named[1].children if c.type == "string_fragment"]
+        name = _text(frag[0]) if frag else None
+    elif callee != "Object.defineProperties":
+        return None
+    if not name or not named:
+        return None
+    target = named[0]
+    owner = _prototype_owner(target)
+    if owner:
+        return name, owner, False
+    if target.type == "identifier" and _text(target) not in _NOT_A_CLASS:
+        return name, _text(target), True
+    return None
+
+
 import re as _re
 
 _JSDOC_PARAM_RE = _re.compile(r"@param\s*\{\s*([?!]?)([A-Za-z_$][\w$.]*)(?:<[^}]*>)?(\[\])?\s*[=]?\s*\}\s*\[?([A-Za-z_$][\w$]*)")
@@ -546,6 +590,12 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                     fnode = match_dict.get("function.node")
                     fnode = fnode[0] if isinstance(fnode, list) else fnode
                     cls, sup = find_owner_class(fnode) if fnode is not None else (None, None)
+                    dp = _define_property_member(fnode) if fnode is not None and fnode.type == "pair" else None
+                    if dp:
+                        # the pair capture named it `value`; it is really X.<name>
+                        capture_dict["function.name"], cls, sup = dp[0], dp[1], None
+                        if dp[2]:
+                            capture_dict["function.static"] = True
                     if cls:
                         capture_dict["function.class"] = cls
                     if sup:

@@ -82,7 +82,7 @@ def measure(repo_path: str) -> dict:
         k = "this" if o in ("this", "super") else ("bare" if not o else "obj")
         by_recv[k] += 1
         resolved = bool(c.get("resolved_function"))
-        if k == "obj" and o.split(".")[0] not in BUILTIN and o.split("[")[0] not in BUILTIN and c.get("function") not in BUILTIN_METHODS:
+        if k == "obj" and o.split(".")[0] not in BUILTIN and o.split("[")[0] not in BUILTIN and c.get("function") not in BUILTIN_METHODS and not c.get("external"):
             obj_project += 1
             obj_project_res += int(resolved)
         if resolved:
@@ -133,6 +133,7 @@ def measure(repo_path: str) -> dict:
         "this_resolved": f"{res_recv['this']}/{by_recv['this']}",
         "obj_resolved": f"{res_recv['obj']}/{by_recv['obj']}",
         "obj_resolved_by": dict(how),
+        "obj_external_calls": sum(1 for c in calls if c.get("external")),
         "obj_project_resolved": f"{obj_project_res}/{obj_project}",
         "obj_project_resolved_pct": round(100 * obj_project_res / max(1, obj_project), 1),
         "bare_resolved": f"{res_recv['bare']}/{by_recv['bare']}",

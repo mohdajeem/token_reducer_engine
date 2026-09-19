@@ -228,6 +228,15 @@ class GraphBuilder:
                 self.handle_call_arguments(sm)
 
         # ======================================================
+        # PASS 4b — CALLABLE VALUES
+        # ======================================================
+        # `const isType = R.propEq('type')` / `const getProp = makeGetter(doc)`: a module-level
+        # value that the code CALLS is a function whatever expression produced it. The query
+        # only sees function literals; usage decides here. Registered like any function
+        # (kind="value") so the ordinary bare-call resolution finds it.
+        self._register_callable_values(semantic_matches)
+
+        # ======================================================
         # PASS 5 — CALLS
         # ======================================================
 
@@ -731,12 +740,25 @@ class GraphBuilder:
                     continue
                 owners.setdefault(fn["name"], set()).add((file, fn["class"]))
         for file_path, calls in self.graph["calls"].items():
+            # local aliases of bare package imports: `import * as R from 'ramda'`, `const fs = require('fs')`
+            external = {}
+            for imp in self.graph["imports"].get(file_path, []):
+                src = imp.get("source") or ""
+                alias = imp.get("alias") or imp.get("name")
+                if alias and src and not src.startswith((".", "/")):
+                    external[alias] = src
             for call in calls:
                 if call.get("resolved_function"):
                     continue
                 recv = call.get("receiver")
                 func = call.get("function")
                 if not recv or not func or recv in ("this", "super", "self"):
+                    continue
+                root = recv.split(".")[0].split("[")[0].split("(")[0]
+                if root in external:
+                    # a library call (R.compose, fs.readFile): unresolvable by design, and
+                    # saying so is more useful than a silent None
+                    call["external"] = external[root]
                     continue
                 caller = call.get("caller_function") or "GLOBAL"
                 typed_file = typed_meta = typed_class = None
@@ -1068,6 +1090,34 @@ class GraphBuilder:
     # ======================================================
     # FUNCTION DEFINITIONS
     # ======================================================
+
+    def _register_callable_values(self, semantic_matches):
+        called = set()
+        for sm in semantic_matches:
+            if sm.match_type == "CALL" and not sm.get("call.obj_name") and sm.get("call.func_name"):
+                called.add(sm.get("call.func_name"))
+        if not called:
+            return
+        for sm in semantic_matches:
+            if sm.match_type != "VARIABLE_ASSIGNMENT" or sm.owner_function:
+                continue
+            name = sm.get("assign.variable")
+            if not name or name not in called:
+                continue
+            if self.function_index.resolve_function(sm.file_path, name):
+                continue
+            self.ensure_file("functions", sm.file_path)
+            metadata = {
+                "name": name,
+                "file": sm.file_path,
+                "start_line": sm.start_point[0] + 1,
+                "end_line": sm.end_point[0] + 1,
+                "kind": "value",
+            }
+            if getattr(sm, "is_test", False):
+                metadata["is_test"] = True
+            self.function_index.register_function(file_path=sm.file_path, function_name=name, metadata=metadata)
+            self.graph["functions"][sm.file_path].append(dict(metadata))
 
     def handle_function_def(self, sm):
 

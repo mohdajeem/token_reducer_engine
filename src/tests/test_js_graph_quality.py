@@ -157,6 +157,15 @@ FIXTURE = {
           q.tick();
         }
         """),
+    "src/ext.js": textwrap.dedent("""\
+        import * as R from 'ramda';
+        const fs = require('fs');
+        export function pick(o) { return R.path(['a'], o) || fs.readFileSync('x'); }
+        const isType = R.propEq('type');
+        export const getProp = makeGetter('props');
+        function makeGetter(k) { return (o) => o[k]; }
+        export function classify(node) { return isType('view', node) && getProp(node); }
+        """),
     "src/typed.ts": textwrap.dedent("""        import { Engine } from './core';
         export function drive(svc: Engine, n: number): number {
           svc.tick();
@@ -314,6 +323,16 @@ def main():
     cand_edges = [e for e in graph["execution_edges"] if e["from"].get("function") == "poke" and e["to"].get("function") == "tick"]
     check("candidate edges exist for each class and carry confidence=candidates",
           {e["to"].get("class") for e in cand_edges} == {"Engine", "Other"} and all(e.get("confidence") == "candidates" for e in cand_edges), cand_edges)
+
+    ecalls = {(c.get("receiver"), c["function"]): c for c in graph["calls"].get("src/ext.js", [])}
+    check("calls on package imports are flagged external (R.path -> ramda, fs.readFileSync -> fs)",
+          (ecalls.get(("R", "path")) or {}).get("external") == "ramda" and (ecalls.get(("fs", "readFileSync")) or {}).get("external") == "fs", ecalls)
+
+    check("`const isType = R.propEq(...)` that is called is registered as a function (kind=value)",
+          any(f["name"] == "isType" and f.get("kind") == "value" for f in fn_entries(graph, "src/ext.js")), names(graph, "src/ext.js"))
+    check("isType(...) and getProp(...) calls resolve to those value-functions",
+          (ecalls.get((None, "isType")) or {}).get("resolved_function") and (ecalls.get((None, "getProp")) or {}).get("resolved_function"),
+          [(k, bool(v.get("resolved_function"))) for k, v in ecalls.items()])
 
     # ---------- 6. tests partition
     tf = fn_entries(graph, "test/engine.test.js")

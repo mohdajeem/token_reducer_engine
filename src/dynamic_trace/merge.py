@@ -91,7 +91,13 @@ def merge_trace(graph, trace, repo_root=None, max_tests_per_edge=5):
         if key in existing:
             se = existing[key]
             if se.get("source") == "trace":
-                continue  # already merged (re-merge after an incremental update): idempotent
+                # already merged (re-merge after an incremental update / a fresh recording):
+                # idempotent, but the staleness verdict follows the CURRENT trace
+                if fa in stale or fb in stale:
+                    se["stale"] = True
+                else:
+                    se.pop("stale", None)
+                continue
             if not se.get("observed"):
                 se["observed"] = True
                 annotated += 1

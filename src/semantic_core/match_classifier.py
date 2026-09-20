@@ -98,7 +98,7 @@ def classify_match(capture_names):
 
 
     # for function 
-    if "function.name" in capture_set:
+    if "function.name" in capture_set or "function.title" in capture_set:
         return "FUNCTION_DEF"
 
     if "class.name" in capture_set:

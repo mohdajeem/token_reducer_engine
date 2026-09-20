@@ -1170,7 +1170,7 @@ def mcp_tests_for(target: str, hops: int = 2, limit: int = 30) -> dict:
 
     Args:
         target: FUNCTION:file:name (or FUNCTION:file:Class.method).
-        hops: Call-edges to follow upstream (1-4).
+        hops: Call-edges to follow upstream (1-6).
     """
     with SERVER_STATE["lock"]:
         graph = SERVER_STATE.get("graph")
@@ -1184,7 +1184,9 @@ def mcp_tests_for(target: str, hops: int = 2, limit: int = 30) -> dict:
         traversal = GraphTraversal(graph)
         traversal.include_tests = True
         with redirect_stdout_to_stderr():
-            up = traversal.find_upstream_nodes(node, max_depth=max(1, min(int(hops or 2), 4)), include_types=["FUNCTION_CALL"])
+            # up to 6: a test reaching the code through a custom matcher / helper closure sits
+            # 5 hops away (test -> matcher -> compare -> marked -> Lexer.lex -> inlineTokens)
+            up = traversal.find_upstream_nodes(node, max_depth=max(1, min(int(hops or 2), 6)), include_types=["FUNCTION_CALL"])
         test_files = {f for f, fns in (graph.get("functions") or {}).items() if any(isinstance(x, dict) and x.get("is_test") for x in fns)}
         out, seen = [], set()
         for e in up:

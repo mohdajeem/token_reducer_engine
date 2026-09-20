@@ -141,6 +141,26 @@ def find_owner_class(func_node):
     return None, None
 
 
+def _title_text(node):
+    """A generated test title built from pieces -- it('should ' + kind + ' example ' + n) --
+    as one name: literal pieces kept, everything computed becomes a `${...}` wildcard."""
+    if node is None:
+        return None
+    if node.type == "string":
+        frags = [c for c in node.children if c.type == "string_fragment"]
+        return "".join(_text(c) for c in frags)
+    if node.type == "template_string":
+        return _text(node)[1:-1]
+    if node.type == "parenthesized_expression" and node.named_children:
+        return _title_text(node.named_children[0])
+    if node.type == "binary_expression":
+        op = [c for c in node.children if not c.is_named]
+        if op and _text(op[0]) == "+":
+            l, r = node.child_by_field_name("left"), node.child_by_field_name("right")
+            return (_title_text(l) or "") + (_title_text(r) or "")
+    return "${" + _text(node)[:40] + "}"
+
+
 def _define_property_member(func_node):
     """`Object.defineProperties(X, { name: { value: fn } })` and
     `Object.defineProperty(X, 'name', { value: fn })` attach `name` to X (static when X is
@@ -452,7 +472,10 @@ def normalize_call_expression(nodes):
     call_node = None
 
     for node in nodes:
-        current = node
+        # start ABOVE the captured node: when the receiver is itself a call --
+        # `expectAsync(spec).toRender(html)` -- the call this capture belongs to is the
+        # outer one, not the receiver (which has its own match and would collide with it)
+        current = node.parent if node.type in ("call_expression", "new_expression") else node
 
         while current:
             # `new X()` is the call only for its own constructor capture; an argument
@@ -651,6 +674,11 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                     capture_dict.pop("class.heritage", None)
 
                 if match_type == "FUNCTION_DEF":
+                    if not capture_dict.get("function.name") and match_dict.get("function.title") is not None:
+                        tnode = match_dict.get("function.title")
+                        tnode = tnode[0] if isinstance(tnode, list) else tnode
+                        capture_dict["function.name"] = _title_text(tnode)
+                        capture_dict.pop("function.title", None)
                     fn_name0 = capture_dict.get("function.name")
                     if isinstance(fn_name0, str) and len(fn_name0) > 1 and fn_name0[0] == "`" and fn_name0[-1] == "`":
                         # a generated test title, it(`should pass example ${n}`): keep the
@@ -760,6 +788,19 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                     sm.owner_class = best_fit_class
             else:
                 sm.owner_class = sm.captures.get("function.class")
+                if not sm.captures.get("function.parent"):
+                    # the smallest OTHER scope that strictly contains this definition: a
+                    # callback / closure / matcher body nested in another function
+                    best, best_size = None, float("inf")
+                    for scope in function_scopes:
+                        if scope["start"] <= sm.start_byte and sm.end_byte <= scope["end"] and \
+                                (scope["start"], scope["end"]) != (sm.start_byte, sm.end_byte) and \
+                                (scope["end"] - scope["start"]) > (sm.end_byte - sm.start_byte):
+                            size = scope["end"] - scope["start"]
+                            if size < best_size:
+                                best, best_size = scope["name"], size
+                    if best:
+                        sm.captures["function.parent"] = best
 
         return semantic_matches
         

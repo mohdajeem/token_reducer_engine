@@ -335,6 +335,7 @@ class GraphBuilder:
             if after == before and n_types2 == n_types and n_ret == getattr(self, "_n_ret_prev", -1):
                 break
             self._n_ret_prev = n_ret
+        self.link_nested_functions()
 
         # ======================================================
         # DETECT TAINT SOURCES
@@ -1225,6 +1226,33 @@ class GraphBuilder:
                                      "candidates": [{"file": cf, "function": m["name"]} for cf, m in cands]})
         return n
 
+    def link_nested_functions(self):
+        """A function defined inside another (a callback passed to forEach, a jasmine
+        matcher's `compare`, an event handler) runs when the enclosing code hands it over,
+        which the graph cannot see. Edge parent -> nested, confidence="nested", so the
+        blast radius of the inner function includes whoever owns it. Idempotent."""
+        have = set()
+        for e in self.graph.get("execution_edges", []):
+            have.add((e["from"].get("file"), e["from"].get("function"), e["to"].get("file"), e["to"].get("function")))
+        n = 0
+        for f, fns in self.graph["functions"].items():
+            for fn in fns:
+                if not isinstance(fn, dict) or not fn.get("parent") or fn.get("kind") == "class":
+                    continue
+                key = (f, fn["parent"], f, fn["name"])
+                if key in have:
+                    continue
+                have.add(key)
+                to_node = {"type": "FUNCTION", "file": f, "function": fn["name"]}
+                if fn.get("class"):
+                    to_node["class"] = fn["class"]
+                is_test = bool(fn.get("is_test"))
+                self.add_execution_edge(from_node={"type": "FUNCTION", "file": f, "function": fn["parent"]}, to_node=to_node,
+                                        edge_type="FUNCTION_CALL", is_test=is_test)
+                self.graph["execution_edges"][-1]["confidence"] = "nested"
+                n += 1
+        return n
+
     def _resolve_marker_call(self, file_path, call, caller, ct, replaced):
         """A bare call `name(...)` where `name` is typed as
           callable:<file>:<fn>[|<fn>...]   a stored function / bound method (factory fixture,
@@ -1468,6 +1496,23 @@ class GraphBuilder:
                                                         edge_type="FUNCTION_CALL", is_test=bool(call.get("is_test")), call_id=call.get("call_id"))
                                 self.graph["execution_edges"][-1]["confidence"] = "candidates"
                             continue
+                if not typed_meta and re.match(r"^expect(Async)?\s*[.(]", recv):
+                    # `expect(x).toRender(html)`: a custom matcher registered with
+                    # jasmine.addMatchers / expect.extend -- the project function of that name
+                    owners_m = [(f, fn) for f, fns in self.graph["functions"].items() for fn in fns
+                                if isinstance(fn, dict) and fn["name"] == func and fn.get("is_test") and fn.get("kind") != "class"]
+                    if len({f for f, _ in owners_m}) == 1:
+                        cf, cm = owners_m[0]
+                        call.update({"resolved_file": cf, "resolved_function": cm, "resolved_class": cm.get("class"), "resolution": "convention"})
+                        from_node = {"type": "FUNCTION", "file": file_path, "function": caller if caller != "GLOBAL" else "GLOBAL_SCOPE"}
+                        if call.get("caller_class"):
+                            from_node["class"] = call["caller_class"]
+                        if call.get("call_id"):
+                            replaced.add(call["call_id"])
+                        self.add_execution_edge(from_node=from_node, to_node={"type": "FUNCTION", "file": cf, "function": func},
+                                                edge_type="FUNCTION_CALL", is_test=bool(call.get("is_test")), call_id=call.get("call_id"))
+                        self.graph["execution_edges"][-1]["confidence"] = "convention"
+                        continue
                 if not typed_meta and call.get("implicit"):
                     continue  # an implicit dunder call resolves only through a typed receiver
                 if not typed_meta and root[:1].isupper() and root == recv and self.resolve_class_file(file_path, root):

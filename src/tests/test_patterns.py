@@ -337,6 +337,57 @@ pattern("js-shared-fixture-var", {
 ])
 
 
+# --------------------------------------------------------------------------- js-custom-matcher
+# markedjs/marked test/specs/run-spec.js + test/helpers/helpers.js (2020+): the runner is
+# chosen at runtime `(spec.only ? fit : it)('should ' + passFail + example, ...)`, and the
+# code under test runs inside a jasmine matcher `expectAsync(spec).toRender(html)` whose
+# `compare` closure is registered with addAsyncMatchers
+pattern("js-custom-matcher", {
+    "package.json": '{"name": "pat"}',
+    "src/marked.js": textwrap.dedent("""        import { Lexer } from './lexer';
+        export function marked(src, opt) {
+          return Lexer.lex(src).join('');
+        }
+        """),
+    "src/lexer.js": textwrap.dedent("""        export class Lexer {
+          static lex(src) {
+            return new Lexer().inlineTokens(src);
+          }
+          inlineTokens(src) {
+            return src.split('~');
+          }
+        }
+        """),
+    "test/helpers/helpers.js": textwrap.dedent("""        const marked = require('../../src/marked.js');
+        beforeEach(() => {
+          jasmine.addAsyncMatchers({
+            toRender: () => {
+              return {
+                compare: async (spec, expected) => {
+                  const actual = marked(spec.markdown, spec.options);
+                  return { pass: actual === expected };
+                }
+              };
+            }
+          });
+        });
+        """),
+    "test/specs/run-spec.js": textwrap.dedent("""        const specs = [{ example: 3, markdown: 'a~b', html: 'ab' }];
+        describe('New', () => {
+          specs.forEach((spec) => {
+            const example = (spec.example ? ' example ' + spec.example : '');
+            const passFail = (spec.shouldFail ? 'fail' : 'pass');
+            (spec.only ? fit : (spec.skip ? xit : it))('should ' + passFail + example, async () => {
+              await expectAsync(spec).toRender(spec.html);
+            });
+          });
+        });
+        """),
+}, [
+    ("FUNCTION:src/lexer.js:Lexer.inlineTokens", "should ${passFail}${example}", 6),
+])
+
+
 def write(files):
     root = Path(tempfile.mkdtemp(prefix="pattern_"))
     for rel, content in files.items():

@@ -225,11 +225,15 @@
 ; Test callbacks are anonymous; register them as functions named by their title so a
 ; failing test id maps to a graph node and `mcp_tests_for` can name the test.
 (call_expression
-  function: (identifier) @test.runner (#match? @test.runner "^(it|test|describe|suite|context|specify)$")
+  function: [
+    (identifier) @test.runner
+    (parenthesized_expression) @test.runner
+  ] (#match? @test.runner "^(it|test|describe|suite|context|specify|fit|xit)$|[ (:?](it|fit|xit|test)[ ):]")
   arguments: (arguments
     [
       (string (string_fragment) @function.name)
       (template_string) @function.name
+      (binary_expression) @function.title
     ]
     [
       (arrow_function)

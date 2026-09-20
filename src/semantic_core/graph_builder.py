@@ -1480,16 +1480,18 @@ class GraphBuilder:
                         n += 1
         return n
 
+    _CONSTRUCTOR_NAMES = frozenset({"__init__", "__new__", "constructor"})
+
     def link_implementations(self):
-        """Java: a call through an interface or superclass type (`owners.findPet(n)` where
-        `owners` is an `OwnerRepository`) lands on the declaring method; the code that runs is
-        the override in an implementing / extending class. Edge `I.m -> C.m` for every class C
-        that declares m and lists I among its superclass/interfaces, confidence="dispatch".
-        Idempotent; only for classes with a declared parent (no name-based guessing)."""
+        """A call through a base type lands on the base's method; the code that runs is the
+        override in a subclass / implementation: Java `owners.findPet(n)` on an
+        `OwnerRepository`, django `ops.quote()` on a `BaseDatabaseOperations`, Chart.js
+        `element.draw()` on an `Element`. Edge `Base.m -> Sub.m` for every class Sub that
+        declares m and lists Base as its superclass / interface, confidence="dispatch",
+        via="implementation". Constructors are not overrides (`Sub()` already resolves to
+        Sub.__init__ directly). Idempotent; only declared parents, no name-based guessing."""
         parents = []  # (impl file, impl class, parent name)
         for f, cs in self.graph["classes"].items():
-            if not f.endswith(".java"):
-                continue
             for cname, entry in cs.items():
                 for p in [entry.get("superclass")] + list(entry.get("interfaces") or []):
                     if p:
@@ -1509,7 +1511,7 @@ class GraphBuilder:
                 if not isinstance(fn, dict) or fn.get("class") != cname or fn.get("kind") == "class":
                     continue
                 m = fn["name"]
-                if m == cname:
+                if m == cname or m in self._CONSTRUCTOR_NAMES:
                     continue  # constructors are not overrides
                 pmeta = self.function_index.resolve_function(pf, f"{p}.{m}")
                 if not pmeta:

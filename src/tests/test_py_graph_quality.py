@@ -386,6 +386,12 @@ def main():
     check("Engine.start carries class=Engine", eng.get("start", {}).get("class") == "Engine", eng.get("start"))
     check("boot (module-level) has no class", "boot" in eng and not eng["boot"].get("class"))
     check("Turbo registered with superclass Engine", (graph["classes"].get(E, {}).get("Turbo") or {}).get("superclass") == "Engine", graph["classes"].get(E))
+    impl = [e for e in graph["execution_edges"] if e.get("via") == "implementation"]
+    check("Engine.tick -> Turbo.tick dispatch edge (a call on the base type reaches the override; confidence=dispatch)",
+          any(e["from"].get("class") == "Engine" and e["from"].get("function") == "tick" and e["to"].get("class") == "Turbo"
+              and e.get("confidence") == "dispatch" for e in impl), impl)
+    check("no implementation edge for __init__ (constructors are not overrides)",
+          not any(e["to"].get("function") == "__init__" for e in impl), impl)
     ec = calls(graph, E)
     c = ec.get(("self", "tick"))
     check("self.tick() inside Engine.start -> Engine.tick", c is not None and c.get("resolved_class") == "Engine" and c.get("resolved_file") == E, c)

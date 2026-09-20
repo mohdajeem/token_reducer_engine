@@ -279,6 +279,11 @@ def main():
     turbo_edges = edges_from(graph, "src/core/engine.js", "tick")
     super_edge = [e for e in turbo_edges if e["from"].get("class") == "Turbo" and e["to"].get("class") == "Engine"]
     check("super.tick() inside Turbo.tick -> edge to Engine.tick", bool(super_edge), turbo_edges)
+    impl = [e for e in graph["execution_edges"] if e.get("via") == "implementation"]
+    check("Engine.tick -> Turbo.tick dispatch edge (a call on the base type reaches the override)",
+          any(e["from"].get("class") == "Engine" and e["from"].get("function") == "tick" and e["to"].get("class") == "Turbo"
+              and e.get("confidence") == "dispatch" for e in impl), impl)
+    check("no implementation edge for constructor", not any(e["to"].get("function") == "constructor" for e in impl), impl)
     calls_eng = [c for c in graph["calls"].get("src/core/engine.js", []) if c.get("receiver") in ("this", "super")]
     check("all this/super calls in engine.js resolved", calls_eng and all(c.get("resolved_function") for c in calls_eng),
           [(c.get("receiver"), c["function"], c.get("resolved_function")) for c in calls_eng])

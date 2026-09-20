@@ -24,6 +24,9 @@ A pattern that passes here is also asserted in the permanent suites so it cannot
   java-routes     @WebMvcTest drives controllers by URL: `mockMvc.perform(get("/owners/new"))`
                   -> the @GetMapping("/owners/new") handler (class @RequestMapping prefix, {vars}).
 
+  py-override-dispatch / js-override-dispatch  the caller holds the BASE type and calls
+                  `ops.quote()` / `element.draw()`; the override in a subclass must be reached.
+
 Run:  python tests/test_patterns.py [pattern ...]
 """
 import contextlib
@@ -1179,6 +1182,117 @@ pattern("java-routes", {
     ("FUNCTION:src/main/java/pat/owner/PetController.java:PetController.initCreationForm", "testInitPetCreationForm", 2),
     ("FUNCTION:src/main/java/pat/owner/PetController.java:PetController.processUpdateForm", "testProcessPetUpdateFormSuccess", 2),
     ("FUNCTION:src/main/java/pat/owner/Owner.java:Owner.getId", "testProcessCreationFormSuccess", 3),
+])
+
+
+# --------------------------------------------------------------------------- py-override-dispatch
+# django's BaseDatabaseOperations / sklearn's BaseEstimator: the caller holds the BASE type
+# (`ops: BaseOperations` parameter, or a factory typed to the base) and calls `ops.quote()`;
+# the code that actually runs is the override in a subclass. A change to the override must
+# reach the tests that drive it through the base-typed caller. `Formatter.quote` is a decoy
+# with the same method name and no relation to the hierarchy.
+pattern("py-override-dispatch", {
+    "pyproject.toml": "[project]\nname = 'pat'\n",
+    "src/pat/__init__.py": "",
+    "src/pat/base.py": textwrap.dedent("""\
+        class BaseOperations:
+            def quote(self, name):
+                raise NotImplementedError
+
+            def compile(self, name):
+                return "SELECT " + self.quote(name)
+        """),
+    "src/pat/sqlite.py": textwrap.dedent("""\
+        from .base import BaseOperations
+
+
+        class SqliteOperations(BaseOperations):
+            def quote(self, name):
+                return '"' + name + '"'
+        """),
+    "src/pat/postgres.py": textwrap.dedent("""\
+        from .base import BaseOperations
+
+
+        class PostgresOperations(BaseOperations):
+            def quote(self, name):
+                return "'" + name + "'"
+        """),
+    "src/pat/format.py": textwrap.dedent("""\
+        class Formatter:
+            def quote(self, name):
+                return name.upper()
+        """),
+    "src/pat/query.py": textwrap.dedent("""\
+        from .base import BaseOperations
+
+
+        def render(ops: BaseOperations, name):
+            return ops.compile(name)
+        """),
+    "tests/test_query.py": textwrap.dedent("""\
+        from pat.query import render
+        from pat.sqlite import SqliteOperations
+
+
+        def test_render_sqlite():
+            assert render(SqliteOperations(), "x") == 'SELECT "x"'
+        """),
+}, [
+    ("FUNCTION:src/pat/sqlite.py:SqliteOperations.quote", "test_render_sqlite", 4),
+    ("FUNCTION:src/pat/postgres.py:PostgresOperations.quote", "test_render_sqlite", 4),
+])
+
+
+# --------------------------------------------------------------------------- js-override-dispatch
+# Chart.js: `Element.draw()` is abstract, every element type overrides it, and the
+# controller holds elements as the base type (`/** @type {Element[]} */`) -- a change to
+# `ArcElement.draw` reaches the tests through `element.draw(ctx)` on the base type.
+pattern("js-override-dispatch", {
+    "package.json": '{"name": "pat"}',
+    "src/element.js": textwrap.dedent("""\
+        export class Element {
+          draw(ctx) { throw new Error('abstract'); }
+          render(ctx) { this.draw(ctx); return ctx; }
+        }
+        """),
+    "src/arc.js": textwrap.dedent("""\
+        import { Element } from './element';
+        export class ArcElement extends Element {
+          draw(ctx) { ctx.push('arc'); }
+        }
+        """),
+    "src/point.js": textwrap.dedent("""\
+        import { Element } from './element';
+        export class PointElement extends Element {
+          draw(ctx) { ctx.push('point'); }
+        }
+        """),
+    "src/legend.js": textwrap.dedent("""\
+        export class Legend {
+          draw(ctx) { ctx.push('legend'); }
+        }
+        """),
+    "src/controller.js": textwrap.dedent("""\
+        /**
+         * @param {Element} element
+         */
+        export function paint(element, ctx) {
+          return element.render(ctx);
+        }
+        """),
+    "test/controller.test.js": textwrap.dedent("""\
+        import { paint } from '../src/controller';
+        import { ArcElement } from '../src/arc';
+        describe('paint', () => {
+          it('draws the arc', () => {
+            expect(paint(new ArcElement(), [])).toEqual(['arc']);
+          });
+        });
+        """),
+}, [
+    ("FUNCTION:src/arc.js:ArcElement.draw", "draws the arc", 4),
+    ("FUNCTION:src/point.js:PointElement.draw", "draws the arc", 4),
 ])
 
 

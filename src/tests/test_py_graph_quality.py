@@ -126,6 +126,25 @@ FIXTURE = {
             n = session().tick()
             return s
         """),
+    # `from pkg.table import Table` where the module is table.py: on a case-insensitive file
+    # system the candidate pkg/table/Table.py "exists" and used to win over table.py
+    "src/pkg/table/__init__.py": "from .table import Table\n",
+    "src/pkg/table/table.py": textwrap.dedent("""\
+        class Table:
+            def __init__(self, data):
+                self.cols = self._convert(data)
+
+            def _convert(self, data):
+                return list(data)
+        """),
+    "src/pkg/use_table.py": textwrap.dedent("""\
+        from pkg.table import Table
+
+
+        def make():
+            t = Table([1, 2])
+            return t.cols
+        """),
     "tests/test_engine.py": textwrap.dedent("""\
         from pkg import boot
 
@@ -236,6 +255,14 @@ def main():
     check("eng_mod.Engine(Gear()).start() (instantiation-expression receiver) resolves to Engine.start", c is not None and c.get("resolved_class") == "Engine", c)
     c = next((x for x in calls(graph, "src/pkg/app.py").values() if x.get("function") == "tick" and str(x.get("receiver")).startswith("session(")), None)
     check("session().tick() (call-expression receiver, factory return type) resolves to Engine.tick", c is not None and c.get("resolved_class") == "Engine", c)
+
+    # ---------- 3d. case-insensitive file systems must not resolve Table -> pkg/table/Table.py
+    uc = calls(graph, "src/pkg/use_table.py")
+    c = uc.get((None, "Table"))
+    check("`from pkg.table import Table` resolves to src/pkg/table/table.py (case-exact), not Table.py",
+          c is not None and c.get("resolved_file") == "src/pkg/table/table.py" and (c.get("resolved_function") or {}).get("kind") == "class", c)
+    ia = srv.mcp_impact_analysis(target="FUNCTION:src/pkg/table/table.py:Table._convert", direction="UPSTREAM", max_depth=2)
+    check("blast radius of Table._convert reaches make() through Table.__init__", any(n.get("function") == "make" for n in ia.get("upstream_nodes", [])), ia.get("upstream_nodes"))
 
     # ---------- 4. external
     c = ac.get(("json", "dumps"))

@@ -1,4 +1,32 @@
 import os
+
+_DIR_CACHE = {}
+
+
+def isfile_exact(path):
+    """os.path.isfile with a case-exact basename check. Windows and macOS file systems are
+    case-insensitive, so `from astropy.table import Table` made the candidate
+    astropy/table/Table.py "exist" (it matched table.py) and the import resolved to a file
+    that has no functions -- every Table(...) call in the tests was lost. The directory
+    listing is cached per directory and refreshed when its mtime changes."""
+    if not os.path.isfile(path):
+        return False
+    d, base = os.path.split(path)
+    d = d or "."
+    try:
+        mtime = os.stat(d).st_mtime_ns
+    except OSError:
+        return False
+    cached = _DIR_CACHE.get(d)
+    if cached is None or cached[0] != mtime:
+        try:
+            cached = (mtime, frozenset(os.listdir(d)))
+        except OSError:
+            return False
+        _DIR_CACHE[d] = cached
+    return base in cached[1]
+
+
 class SymbolTable:
 
     def __init__(self):
@@ -40,7 +68,7 @@ class SymbolTable:
         candidates += [target + ext for ext in self._JS_EXTS]
         candidates += [os.path.join(target, "index" + ext).replace("\\", "/") for ext in self._JS_EXTS]
         for cand in candidates:
-            if os.path.isfile(cand):
+            if isfile_exact(cand):
                 out = cand
                 break
         else:
@@ -123,7 +151,7 @@ class SymbolTable:
                 candidates.append(os.path.join(b, *parts) + ".py")
                 candidates.append(os.path.join(b, *parts, "__init__.py"))
         for cand in candidates:
-            if os.path.isfile(cand):
+            if isfile_exact(cand):
                 out = os.path.normpath(cand).replace("\\", "/")
                 if project_root and os.path.isabs(out):
                     out = os.path.relpath(out, project_root).replace("\\", "/")
@@ -194,7 +222,7 @@ class SymbolTable:
             resolved = None
             for _ in range(10):
                 candidate = os.path.normpath(os.path.join(curr_dir, package_path)).replace("\\", "/")
-                if os.path.exists(candidate):
+                if isfile_exact(candidate):
                     if project_root:
                         resolved = os.path.relpath(candidate, project_root).replace("\\", "/")
                     else:

@@ -384,6 +384,53 @@ def restore_builder(graph, directory):
     return b
 
 
+def _index_workers(n_files):
+    """Process count for parsing. Opt-in via SEMANTIC_BUILD_WORKERS=N: on a 4-thread laptop
+    the spawn cost (~2-3 s on Windows, tree-sitter + queries re-imported per worker) ate the
+    gain on Chart.js (4.6 s serial vs 6.9 s with 4 workers); it pays on many-core machines
+    with astropy/django-sized trees. Serial by default so nothing gets slower silently."""
+    env = os.environ.get("SEMANTIC_BUILD_WORKERS", "").strip()
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            return 1
+    return 1
+
+
+def _index_files(directory, rel_paths):
+    """Yield (rel_path, index_file result) in walk order. Parsing is per-file and pure, so
+    files are indexed in a process pool when the repo is large; the builder passes stay
+    serial, so the graph is identical either way. Falls back to serial on any pool error
+    (a caller without a __main__ guard on Windows, a sandbox without process spawning)."""
+    workers = _index_workers(len(rel_paths))
+    if workers > 1:
+        try:
+            import concurrent.futures as _cf
+            import multiprocessing as _mp
+            with _cf.ProcessPoolExecutor(max_workers=workers, mp_context=_mp.get_context("spawn")) as pool:
+                results = list(pool.map(_index_one, ((directory, r) for r in rel_paths), chunksize=8))
+            for rel, res in zip(rel_paths, results):
+                yield rel, res
+            return
+        except Exception as e:  # noqa: BLE001
+            print(f"[WARNING] parallel indexing unavailable ({type(e).__name__}: {e}); indexing serially", file=sys.stderr)
+    for rel in rel_paths:
+        try:
+            yield rel, index_file(directory, rel)
+        except Exception as e:  # noqa: BLE001
+            print(f"[WARNING] Skipped indexing {rel} due to error: {e}")
+
+
+def _index_one(args):
+    directory, rel = args
+    try:
+        return index_file(directory, rel)
+    except Exception as e:  # noqa: BLE001
+        print(f"[WARNING] Skipped indexing {rel} due to error: {e}")
+        return None
+
+
 def build_graph(directory):
     global GLOBAL_BUILDER
     # first check SemanticGraph
@@ -398,6 +445,7 @@ def build_graph(directory):
     option_conflicts = set()
 
 
+    rel_paths = []
     for root, dirs, files in os.walk(directory):
 
         # Ignore node_modules etc
@@ -407,22 +455,13 @@ def build_graph(directory):
         ]
 
         for file in files:
+            rel_paths.append(os.path.relpath(os.path.join(root, file), directory).replace("\\", "/"))
 
-            abs_path = os.path.join(
-                root,
-                file
-            )
-
-            rel_path = os.path.relpath(
-                abs_path,
-                directory
-            ).replace("\\", "/")
-
+    for rel_path, indexed in _index_files(directory, rel_paths):
             if DEBUG_GRAPH_BUILD:
                 print(f"📄 Parsing: {rel_path}")
 
             try:
-                indexed = index_file(directory, rel_path)
                 if indexed is None:
                     continue
                 semantic_matches, lits, defaults, fws = indexed

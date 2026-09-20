@@ -179,6 +179,27 @@ def main():
     check("after crash recovery: incremental == full", inc == full, diff_report(inc, full))
     SnapshotManager(str(snap.parent)).wait()
 
+    # ---- 8. change detection vs git as an independent oracle: modified, added (untracked)
+    # and deleted source files must all be reported, and nothing else
+    import subprocess
+    from incremental_runtime.change_detector import ChangeDetector
+    git = shutil.which("git")
+    if git:
+        def _git(*a):
+            return subprocess.run([git, *a], cwd=str(root), capture_output=True, text=True)
+        _git("init", "-q"); _git("config", "user.email", "t@t"); _git("config", "user.name", "t")
+        _git("add", "-A"); _git("commit", "-qm", "base")
+        det = ChangeDetector()
+        det.get_changed_files(str(root), cache_dir=str(snap.parent))  # baseline hashes
+        (root / "src/core/engine.js").write_text((root / "src/core/engine.js").read_text(encoding="utf-8") + "\n// git-oracle\n", encoding="utf-8")
+        (root / "src/brand_new.js").write_text("export function fresh() { return 1; }\n", encoding="utf-8")
+        os.remove(root / "src/other.js")
+        ours = set(det.get_changed_files(str(root), cache_dir=str(snap.parent)))
+        porcelain = _git("status", "--porcelain", "--untracked-files=all").stdout.splitlines()
+        theirs = {ln[3:].strip().strip('"') for ln in porcelain if ln[3:].strip().endswith((".js", ".ts", ".py", ".jsx", ".tsx"))}
+        theirs = {t for t in theirs if not t.startswith(".semantic_cache")}
+        check("change detection == git status (modified + untracked + deleted source files)", ours == theirs, (sorted(ours), sorted(theirs)))
+
     shutil.rmtree(root, ignore_errors=True)
     print(f"\n(timing on fixture: incremental {inc_secs:.2f}s, no-change reload {reload_secs:.2f}s)")
     if fails:

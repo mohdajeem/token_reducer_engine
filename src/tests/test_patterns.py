@@ -13,6 +13,17 @@ A pattern that passes here is also asserted in the permanent suites so it cannot
                   HTTPDigestAuth.__call__; `catalog[0]` -> __getitem__; `with Session() as s`
                   -> __enter__.
 
+  java-di-field   spring-petclinic: `private final OwnerRepository owners;` used as
+                  `this.owners.findByLastName(..)` / bare `owners.save(..)`; the type is an interface.
+  java-inheritance petclinic model chain `Pet extends NamedEntity extends BaseEntity`, and
+                  `JpaOwnerRepository implements OwnerRepository` reached through the interface.
+
+  java-fluent-chain `owner.getPet("Max").getType().getName()`, a builder chain, a local typed
+                  from a call (`Owner found = owners.findById(1)`), `for (Pet pet : getPets())`.
+
+  java-routes     @WebMvcTest drives controllers by URL: `mockMvc.perform(get("/owners/new"))`
+                  -> the @GetMapping("/owners/new") handler (class @RequestMapping prefix, {vars}).
+
 Run:  python tests/test_patterns.py [pattern ...]
 """
 import contextlib
@@ -403,7 +414,7 @@ pattern("module-constants", {
     "src/dj/__init__.py": "",
     "src/dj/dateparse.py": textwrap.dedent("""        import re
 
-        standard_duration_re = re.compile(r"^(?:(?P<days>-?\d+) (days?, )?)?")
+        standard_duration_re = re.compile(r"^(?:(?P<days>-?\\d+) (days?, )?)?")
         iso8601_duration_re = re.compile(r"^P")
 
 
@@ -568,6 +579,606 @@ pattern("js-custom-matcher", {
         """),
 }, [
     ("FUNCTION:src/lexer.js:Lexer.inlineTokens", "should ${passFail}${example}", 6),
+])
+
+
+# --------------------------------------------------------------------------- java-di-field
+# spring-petclinic OwnerController: the repository is a constructor-injected FIELD
+# (`private final OwnerRepository owners;`) and every use is `this.owners.xxx(...)` or bare
+# `owners.xxx(...)`; the field's declared type is an INTERFACE (Spring Data writes the impl).
+# The test calls the controller method directly (WebMvc route tests are java-routes).
+pattern("java-di-field", {
+    "pom.xml": "<project><artifactId>pat</artifactId></project>\n",
+    "src/main/java/pat/owner/OwnerRepository.java": textwrap.dedent("""\
+        package pat.owner;
+
+        import java.util.List;
+
+        public interface OwnerRepository {
+
+            List<Owner> findByLastName(String lastName);
+
+            Owner save(Owner owner);
+
+        }
+        """),
+    "src/main/java/pat/owner/Owner.java": textwrap.dedent("""\
+        package pat.owner;
+
+        public class Owner {
+
+            private String lastName;
+
+            public String getLastName() {
+                return this.lastName;
+            }
+
+            public void setLastName(String lastName) {
+                this.lastName = lastName;
+            }
+
+        }
+        """),
+    "src/main/java/pat/owner/OwnerController.java": textwrap.dedent("""\
+        package pat.owner;
+
+        import java.util.List;
+
+        public class OwnerController {
+
+            private final OwnerRepository owners;
+
+            public OwnerController(OwnerRepository owners) {
+                this.owners = owners;
+            }
+
+            public String processFindForm(Owner owner) {
+                List<Owner> results = this.owners.findByLastName(owner.getLastName());
+                if (results.isEmpty()) {
+                    return "owners/findOwners";
+                }
+                return "owners/ownersList";
+            }
+
+            public String processCreationForm(Owner owner) {
+                owners.save(owner);
+                return "redirect:/owners/" + owner.getLastName();
+            }
+
+        }
+        """),
+    "src/test/java/pat/owner/OwnerControllerTests.java": textwrap.dedent("""\
+        package pat.owner;
+
+        import org.junit.jupiter.api.Test;
+
+        class OwnerControllerTests {
+
+            @Test
+            void processFindFormSuccess() {
+                OwnerController controller = new OwnerController(new InMemoryOwners());
+                Owner owner = new Owner();
+                owner.setLastName("Franklin");
+                assertEquals("owners/ownersList", controller.processFindForm(owner));
+            }
+
+            @Test
+            void processCreationFormSuccess() {
+                OwnerController controller = new OwnerController(new InMemoryOwners());
+                assertEquals("redirect:/owners/Franklin", controller.processCreationForm(new Owner()));
+            }
+
+        }
+        """),
+}, [
+    ("FUNCTION:src/main/java/pat/owner/OwnerRepository.java:OwnerRepository.findByLastName", "processFindFormSuccess", 4),
+    ("FUNCTION:src/main/java/pat/owner/OwnerRepository.java:OwnerRepository.save", "processCreationFormSuccess", 4),
+    ("FUNCTION:src/main/java/pat/owner/Owner.java:Owner.getLastName", "processFindFormSuccess", 4),
+])
+
+
+# --------------------------------------------------------------------------- java-inheritance
+# spring-petclinic model: `Owner extends Person extends NamedEntity extends BaseEntity` -- the
+# test calls `owner.getId()` / `pet.setName()` on a subclass instance, the method lives three
+# levels up; and `interface OwnerRepository` + `class JpaOwnerRepository implements
+# OwnerRepository` -- a call through the interface must reach the implementation.
+pattern("java-inheritance", {
+    "pom.xml": "<project><artifactId>pat</artifactId></project>\n",
+    "src/main/java/pat/model/BaseEntity.java": textwrap.dedent("""\
+        package pat.model;
+
+        public class BaseEntity {
+
+            private Integer id;
+
+            public Integer getId() {
+                return id;
+            }
+
+            public boolean isNew() {
+                return this.id == null;
+            }
+
+        }
+        """),
+    "src/main/java/pat/model/NamedEntity.java": textwrap.dedent("""\
+        package pat.model;
+
+        public class NamedEntity extends BaseEntity {
+
+            private String name;
+
+            public String getName() {
+                return this.name;
+            }
+
+            public void setName(String name) {
+                this.name = name;
+            }
+
+        }
+        """),
+    "src/main/java/pat/owner/Pet.java": textwrap.dedent("""\
+        package pat.owner;
+
+        import pat.model.NamedEntity;
+
+        public class Pet extends NamedEntity {
+
+            private String birthDate;
+
+        }
+        """),
+    # same method names, unrelated class: a bare-name guess would point here too
+    "src/main/java/pat/vet/Vet.java": textwrap.dedent("""\
+        package pat.vet;
+
+        public class Vet {
+
+            private String name;
+
+            public void setName(String name) {
+                this.name = name.toUpperCase();
+            }
+
+            public boolean isNew() {
+                return this.name == null;
+            }
+
+        }
+        """),
+    "src/main/java/pat/owner/OwnerRepository.java": textwrap.dedent("""\
+        package pat.owner;
+
+        public interface OwnerRepository {
+
+            Pet findPet(String name);
+
+        }
+        """),
+    "src/main/java/pat/owner/JpaOwnerRepository.java": textwrap.dedent("""\
+        package pat.owner;
+
+        import java.util.HashMap;
+        import java.util.Map;
+
+        public class JpaOwnerRepository implements OwnerRepository {
+
+            private final Map<String, Pet> pets = new HashMap<>();
+
+            @Override
+            public Pet findPet(String name) {
+                return pets.get(name);
+            }
+
+        }
+        """),
+    "src/main/java/pat/owner/InMemoryOwnerRepository.java": textwrap.dedent("""\
+        package pat.owner;
+
+        public class InMemoryOwnerRepository implements OwnerRepository {
+
+            @Override
+            public Pet findPet(String name) {
+                Pet pet = new Pet();
+                pet.setName(name);
+                return pet;
+            }
+
+        }
+        """),
+    "src/main/java/pat/owner/PetService.java": textwrap.dedent("""\
+        package pat.owner;
+
+        public class PetService {
+
+            private final OwnerRepository owners;
+
+            public PetService(OwnerRepository owners) {
+                this.owners = owners;
+            }
+
+            public String petName(String name) {
+                Pet pet = owners.findPet(name);
+                return pet.getName();
+            }
+
+        }
+        """),
+    "src/test/java/pat/owner/PetTests.java": textwrap.dedent("""\
+        package pat.owner;
+
+        import org.junit.jupiter.api.Test;
+
+        class PetTests {
+
+            @Test
+            void petIsNewWithoutId() {
+                Pet pet = new Pet();
+                pet.setName("Max");
+                assertTrue(pet.isNew());
+            }
+
+            @Test
+            void serviceFindsPetByName() {
+                PetService service = new PetService(new JpaOwnerRepository());
+                assertEquals("Max", service.petName("Max"));
+            }
+
+        }
+        """),
+}, [
+    ("FUNCTION:src/main/java/pat/model/NamedEntity.java:NamedEntity.setName", "petIsNewWithoutId", 4),
+    ("FUNCTION:src/main/java/pat/model/BaseEntity.java:BaseEntity.isNew", "petIsNewWithoutId", 4),
+    ("FUNCTION:src/main/java/pat/owner/JpaOwnerRepository.java:JpaOwnerRepository.findPet", "serviceFindsPetByName", 4),
+    ("FUNCTION:src/main/java/pat/owner/InMemoryOwnerRepository.java:InMemoryOwnerRepository.findPet", "serviceFindsPetByName", 4),
+])
+
+
+# --------------------------------------------------------------------------- java-fluent-chain
+# spring-petclinic: `owner.getPet("Max").getType().getName()` -- every hop is typed by the
+# DECLARED return type of the previous call; `Visit.builder().description(d).build()` -- a
+# builder whose setters return `this`; `Owner found = repo.findById(id)` -- a local typed
+# from a call, not from `new`; `for (Pet pet : owner.getPets())`. Two classes share the
+# method names (`Vet.getName`, `Vet.getType`) so a bare-name guess cannot pass this.
+pattern("java-fluent-chain", {
+    "pom.xml": "<project><artifactId>pat</artifactId></project>\n",
+    "src/main/java/pat/model/NamedEntity.java": textwrap.dedent("""\
+        package pat.model;
+
+        public class NamedEntity {
+
+            private String name;
+
+            public String getName() {
+                return this.name;
+            }
+
+            public void setName(String name) {
+                this.name = name;
+            }
+
+        }
+        """),
+    "src/main/java/pat/owner/PetType.java": textwrap.dedent("""\
+        package pat.owner;
+
+        import pat.model.NamedEntity;
+
+        public class PetType extends NamedEntity {
+
+        }
+        """),
+    "src/main/java/pat/owner/Pet.java": textwrap.dedent("""\
+        package pat.owner;
+
+        import pat.model.NamedEntity;
+
+        public class Pet extends NamedEntity {
+
+            private PetType type;
+
+            public PetType getType() {
+                return this.type;
+            }
+
+            public void setType(PetType type) {
+                this.type = type;
+            }
+
+        }
+        """),
+    "src/main/java/pat/owner/Owner.java": textwrap.dedent("""\
+        package pat.owner;
+
+        import java.util.ArrayList;
+        import java.util.List;
+
+        public class Owner {
+
+            private final List<Pet> pets = new ArrayList<>();
+
+            public List<Pet> getPets() {
+                return this.pets;
+            }
+
+            public Pet getPet(String name) {
+                for (Pet pet : getPets()) {
+                    if (pet.getName().equals(name)) {
+                        return pet;
+                    }
+                }
+                return null;
+            }
+
+            public int petCount() {
+                int n = 0;
+                for (Pet pet : this.pets) {
+                    if (pet.getType() != null) {
+                        n++;
+                    }
+                }
+                return n;
+            }
+
+        }
+        """),
+    "src/main/java/pat/owner/OwnerRepository.java": textwrap.dedent("""\
+        package pat.owner;
+
+        public interface OwnerRepository {
+
+            Owner findById(int id);
+
+        }
+        """),
+    "src/main/java/pat/owner/Visit.java": textwrap.dedent("""\
+        package pat.owner;
+
+        public class Visit {
+
+            private String description;
+
+            public static Builder builder() {
+                return new Builder();
+            }
+
+            public String getDescription() {
+                return this.description;
+            }
+
+            public static class Builder {
+
+                private final Visit visit = new Visit();
+
+                public Builder description(String description) {
+                    visit.description = description;
+                    return this;
+                }
+
+                public Visit build() {
+                    return visit;
+                }
+
+            }
+
+        }
+        """),
+    "src/main/java/pat/vet/Vet.java": textwrap.dedent("""\
+        package pat.vet;
+
+        public class Vet {
+
+            public String getName() {
+                return "vet";
+            }
+
+            public String getType() {
+                return "vet";
+            }
+
+            public String getDescription() {
+                return "vet";
+            }
+
+        }
+        """),
+    "src/test/java/pat/owner/OwnerTests.java": textwrap.dedent("""\
+        package pat.owner;
+
+        import org.junit.jupiter.api.Test;
+
+        class OwnerTests {
+
+            @Test
+            void petTypeNameThroughChain() {
+                Owner owner = new Owner();
+                assertEquals("dog", owner.getPet("Max").getType().getName());
+            }
+
+            @Test
+            void builderKeepsDescription() {
+                Visit visit = Visit.builder().description("checkup").build();
+                assertEquals("checkup", visit.getDescription());
+            }
+
+            @Test
+            void foundOwnerCountsPets(OwnerRepository owners) {
+                Owner found = owners.findById(1);
+                assertEquals(1, found.petCount());
+            }
+
+        }
+        """),
+}, [
+    ("FUNCTION:src/main/java/pat/owner/Pet.java:Pet.getType", "petTypeNameThroughChain", 2),
+    ("FUNCTION:src/main/java/pat/model/NamedEntity.java:NamedEntity.getName", "petTypeNameThroughChain", 2),
+    ("FUNCTION:src/main/java/pat/owner/Visit.java:Builder.description", "builderKeepsDescription", 2),
+    ("FUNCTION:src/main/java/pat/owner/Visit.java:Builder.build", "builderKeepsDescription", 2),
+    ("FUNCTION:src/main/java/pat/owner/Visit.java:Visit.getDescription", "builderKeepsDescription", 2),
+    ("FUNCTION:src/main/java/pat/owner/Owner.java:Owner.petCount", "foundOwnerCountsPets", 2),
+    ("FUNCTION:src/main/java/pat/owner/Pet.java:Pet.getType", "foundOwnerCountsPets", 3),
+])
+
+
+# --------------------------------------------------------------------------- java-routes
+# spring-petclinic OwnerControllerTests / PetControllerTests: a @WebMvcTest never names the
+# controller method -- it drives it by URL: `mockMvc.perform(get("/owners/new"))`,
+# `post("/owners/new").param(..)`, `get("/owners/{ownerId}/pets/new", 1)`. The handler is
+# found by its @GetMapping/@PostMapping path (class-level @RequestMapping prefix included).
+pattern("java-routes", {
+    "pom.xml": "<project><artifactId>pat</artifactId></project>\n",
+    "src/main/java/pat/owner/OwnerController.java": textwrap.dedent("""\
+        package pat.owner;
+
+        import org.springframework.stereotype.Controller;
+        import org.springframework.web.bind.annotation.GetMapping;
+        import org.springframework.web.bind.annotation.PostMapping;
+
+        @Controller
+        class OwnerController {
+
+            private static final String VIEWS_OWNER_CREATE_OR_UPDATE_FORM = "owners/createOrUpdateOwnerForm";
+
+            @GetMapping("/owners/new")
+            public String initCreationForm() {
+                return VIEWS_OWNER_CREATE_OR_UPDATE_FORM;
+            }
+
+            @PostMapping("/owners/new")
+            public String processCreationForm(Owner owner) {
+                return "redirect:/owners/" + owner.getId();
+            }
+
+            @GetMapping("/owners/{ownerId}")
+            public String showOwner(int ownerId) {
+                return "owners/ownerDetails";
+            }
+
+            @GetMapping("/owners")
+            public String processFindForm(Owner owner) {
+                return "owners/ownersList";
+            }
+
+        }
+        """),
+    "src/main/java/pat/owner/PetController.java": textwrap.dedent("""\
+        package pat.owner;
+
+        import org.springframework.stereotype.Controller;
+        import org.springframework.web.bind.annotation.GetMapping;
+        import org.springframework.web.bind.annotation.PostMapping;
+        import org.springframework.web.bind.annotation.RequestMapping;
+
+        @Controller
+        @RequestMapping("/owners/{ownerId}")
+        class PetController {
+
+            @GetMapping("/pets/new")
+            public String initCreationForm(Owner owner) {
+                return "pets/createOrUpdatePetForm";
+            }
+
+            @PostMapping("/pets/{petId}/edit")
+            public String processUpdateForm(Owner owner, int petId) {
+                return "redirect:/owners/" + owner.getId();
+            }
+
+        }
+        """),
+    "src/main/java/pat/owner/Owner.java": textwrap.dedent("""\
+        package pat.owner;
+
+        public class Owner {
+
+            private Integer id;
+
+            public Integer getId() {
+                return id;
+            }
+
+        }
+        """),
+    "src/test/java/pat/owner/OwnerControllerTests.java": textwrap.dedent("""\
+        package pat.owner;
+
+        import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+        import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+        import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+        import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
+
+        import org.junit.jupiter.api.Test;
+        import org.springframework.beans.factory.annotation.Autowired;
+        import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+        import org.springframework.test.web.servlet.MockMvc;
+
+        @WebMvcTest(OwnerController.class)
+        class OwnerControllerTests {
+
+            @Autowired
+            private MockMvc mockMvc;
+
+            @Test
+            void testInitCreationForm() throws Exception {
+                mockMvc.perform(get("/owners/new")).andExpect(status().isOk())
+                    .andExpect(view().name("owners/createOrUpdateOwnerForm"));
+            }
+
+            @Test
+            void testProcessCreationFormSuccess() throws Exception {
+                mockMvc.perform(post("/owners/new").param("firstName", "Joe").param("lastName", "Bloggs"))
+                    .andExpect(status().is3xxRedirection());
+            }
+
+            @Test
+            void testShowOwner() throws Exception {
+                mockMvc.perform(get("/owners/{ownerId}", 1)).andExpect(status().isOk());
+            }
+
+            @Test
+            void testProcessFindFormSuccess() throws Exception {
+                mockMvc.perform(get("/owners?page=1")).andExpect(status().isOk());
+            }
+
+        }
+        """),
+    "src/test/java/pat/owner/PetControllerTests.java": textwrap.dedent("""\
+        package pat.owner;
+
+        import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+        import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+        import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+        import org.junit.jupiter.api.Test;
+        import org.springframework.beans.factory.annotation.Autowired;
+        import org.springframework.test.web.servlet.MockMvc;
+
+        class PetControllerTests {
+
+            @Autowired
+            private MockMvc mockMvc;
+
+            @Test
+            void testInitPetCreationForm() throws Exception {
+                mockMvc.perform(get("/owners/1/pets/new")).andExpect(status().isOk());
+            }
+
+            @Test
+            void testProcessPetUpdateFormSuccess() throws Exception {
+                mockMvc.perform(post("/owners/1/pets/2/edit").param("name", "Betty"))
+                    .andExpect(status().is3xxRedirection());
+            }
+
+        }
+        """),
+}, [
+    ("FUNCTION:src/main/java/pat/owner/OwnerController.java:OwnerController.initCreationForm", "testInitCreationForm", 2),
+    ("FUNCTION:src/main/java/pat/owner/OwnerController.java:OwnerController.processCreationForm", "testProcessCreationFormSuccess", 2),
+    ("FUNCTION:src/main/java/pat/owner/OwnerController.java:OwnerController.showOwner", "testShowOwner", 2),
+    ("FUNCTION:src/main/java/pat/owner/OwnerController.java:OwnerController.processFindForm", "testProcessFindFormSuccess", 2),
+    ("FUNCTION:src/main/java/pat/owner/PetController.java:PetController.initCreationForm", "testInitPetCreationForm", 2),
+    ("FUNCTION:src/main/java/pat/owner/PetController.java:PetController.processUpdateForm", "testProcessPetUpdateFormSuccess", 2),
+    ("FUNCTION:src/main/java/pat/owner/Owner.java:Owner.getId", "testProcessCreationFormSuccess", 3),
 ])
 
 

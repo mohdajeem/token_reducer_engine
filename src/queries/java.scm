@@ -2,41 +2,38 @@
 ; 1. IMPORTS & EXPORTS
 ; =============================================================================
 
+; `import a.b.C;` / `import static a.b.C.m;` / `import static a.b.C.*;` / `import a.b.*;`
 (import_declaration
+  "static"? @import.static
   (scoped_identifier) @import.source
+  (asterisk)? @import.star
 ) @import.node
 
-; Class names
+; Class names (extends / implements are read off the node by the extractor:
+; `superclass` -> class.superclass, `super_interfaces` -> class.interfaces)
 (class_declaration
-  (identifier) @class.name
+  name: (identifier) @class.name
 ) @class.node
 
 (interface_declaration
-  (identifier) @class.name
+  name: (identifier) @class.name
+) @class.node
+
+(enum_declaration
+  name: (identifier) @class.name
+) @class.node
+
+(record_declaration
+  name: (identifier) @class.name
 ) @class.node
 
 ; =============================================================================
-; 2. ROUTE DEFINITIONS (Spring Boot REST Endpoints)
+; 2. ROUTES (Spring @GetMapping / @RequestMapping) and @Test
 ; =============================================================================
-
-(method_declaration
-  (modifiers
-    (annotation
-      name: (identifier) @route.method
-      arguments: (annotation_argument_list (string_literal) @route.path)
-    )
-  )
-  (identifier) @route.handler
-) @route.node
-
-(method_declaration
-  (modifiers
-    (marker_annotation
-      name: (identifier) @route.method
-    )
-  )
-  (identifier) @route.handler
-) @route.node
+; Not a query rule: EVERY annotation (@Override, @Test, @Autowired) used to match here as a
+; "route" and came out UNKNOWN. The extractor reads the annotations off the
+; method_declaration / class_declaration node instead (function.annotations,
+; class.annotations); the builder turns *Mapping ones into routes.
 
 ; =============================================================================
 ; 3. FUNCTION/METHOD DEFINITIONS & PARAMETERS
@@ -58,15 +55,31 @@
 ; 4. VARIABLE ASSIGNMENTS & INJECTIONS (Type tracking)
 ; =============================================================================
 
-; Local variable instantiation: UserService service = new UserService();
+; Local variables: the DECLARED type types the variable whatever the value is --
+; `Owner found = owners.findById(1);`, `Owner o = new Owner();`, `List<Pet> pets = ...;`
+; (`var x = new Owner()` has type "var": the builder falls back to the value)
 (local_variable_declaration
   type: (type_identifier) @assign.type
   (variable_declarator
     name: (identifier) @assign.variable
-    value: (object_creation_expression
-      type: (type_identifier) @assign.value_type
-    )
+    value: (_)? @assign.value
   )
+) @assign.node
+
+(local_variable_declaration
+  type: (generic_type
+    . (type_identifier) @assign.type
+  )
+  (variable_declarator
+    name: (identifier) @assign.variable
+    value: (_)? @assign.value
+  )
+) @assign.node
+
+; `for (Pet pet : owner.getPets())` -- the loop variable is declared with its type
+(enhanced_for_statement
+  type: (type_identifier) @assign.type
+  name: (identifier) @assign.variable
 ) @assign.node
 
 ; Generic field declaration (supports Autowired, private, public, etc.)
@@ -77,12 +90,28 @@
   )
 ) @field.node
 
+; `private final Map<String, Pet> pets;` / `List<Owner> owners;` -- the raw type is the
+; receiver type of `pets.get(..)`; the type arguments are kept in field.type_args
+(field_declaration
+  type: (generic_type
+    . (type_identifier) @field.type
+    (type_arguments) @field.type_args
+  )
+  (variable_declarator
+    name: (identifier) @field.variable
+  )
+) @field.node
+
 ; =============================================================================
 ; 5. METHOD INVOCATIONS (Calls)
 ; =============================================================================
 
+; the receiver is ANY expression: `owners.save(o)`, `this.owners.findById(id)`,
+; `this.tick()`, `new Owner().getId()`, `mockMvc.perform(..).andExpect(..)` -- the builder
+; types it (field / local / instantiation / call-return); 40% of petclinic's calls have a
+; field_access or method_invocation receiver that the old `(identifier)`-only rule dropped
 (method_invocation
-  object: (identifier) @call.obj_name
+  object: (_) @call.obj_name
   name: (identifier) @call.func_name
 ) @call.node
 

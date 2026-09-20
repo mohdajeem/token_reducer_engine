@@ -337,6 +337,8 @@ class GraphBuilder:
             self._n_ret_prev = n_ret
         self.link_nested_functions()
         self.link_constant_uses()
+        self.link_implementations()
+        self.link_java_routes()
 
         # ======================================================
         # DETECT TAINT SOURCES
@@ -649,6 +651,7 @@ class GraphBuilder:
 
             # project file this import reaches, None for stdlib / third-party
             "file": resolved_file if isinstance(resolved_file, str) else None,
+            **({"static": True} if sm.get("import.static") else {}),
         })
 
         # A Python module that imports a name re-exports it (importing binds the name in the
@@ -1013,6 +1016,11 @@ class GraphBuilder:
             cf, cm = self.resolve_method(file_path, recv_t, name)
             if cm:
                 return (cf, cm["name"])
+        if not recv_t and head[:1].isupper() and "." not in head and self.resolve_class_file(file_path, head):
+            # `Visit.builder()` / `Lexer.lex(src)`: the receiver is the class -> static method
+            cf, cm = self.resolve_method(file_path, head, name, _want_static=True)
+            if cm:
+                return (cf, cm["name"])
         # module alias: plt.subplots()
         imp = self.symbol_table.resolve_import(file_path, head)
         if imp:
@@ -1372,6 +1380,152 @@ class GraphBuilder:
                                      "candidates": [{"file": cf, "function": m["name"]} for cf, m in cands]})
         return n
 
+    _JAVA_LANG_NAMES = frozenset({"String", "Integer", "Long", "Short", "Byte", "Double", "Float", "Boolean", "Character",
+                                  "Math", "Objects", "System", "Thread", "StringBuilder", "StringBuffer", "Object",
+                                  "Class", "Enum", "Exception", "RuntimeException", "Throwable", "Runtime", "Iterable"})
+
+    _JAVA_MAPPINGS = {"GetMapping": "GET", "PostMapping": "POST", "PutMapping": "PUT", "DeleteMapping": "DELETE",
+                      "PatchMapping": "PATCH", "RequestMapping": "ANY"}
+
+    def _java_route_from_annotations(self, sm, function_name, owner_class, annotations):
+        """`@GetMapping("/owners/new")` on OwnerController.initCreationForm -> a route record
+        (method, path with the class-level @RequestMapping prefix, handler) plus the
+        ROUTE -> handler edge, same shape as the Express routes."""
+        for ann, method in self._JAVA_MAPPINGS.items():
+            if ann not in annotations:
+                continue
+            path = annotations.get(ann) or ""
+            prefix = ""
+            if owner_class:
+                centry = self.graph["classes"].get(sm.file_path, {}).get(owner_class) or {}
+                prefix = (centry.get("annotations") or {}).get("RequestMapping") or ""
+            full = (prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") or "/"
+            self.ensure_file("routes", sm.file_path)
+            route = {"path": full, "method": method, "handler": {"function": function_name, "class": owner_class},
+                     "file": sm.file_path, "framework": "spring"}
+            self.graph["routes"][sm.file_path].append(route)
+            self.add_execution_edge(from_node={"type": "ROUTE", "route": full, "method": method, "file": sm.file_path},
+                                    to_node={"type": "FUNCTION", "file": sm.file_path, "function": function_name, "class": owner_class},
+                                    edge_type="ROUTE_CALL")
+
+    _JAVA_TEST_REQUEST_RE = re.compile(
+        r"(?<![\w])(?:MockMvcRequestBuilders\.)?(get|post|put|delete|patch|options|head|multipart|getForObject|getForEntity|postForObject|postForEntity|"
+        r"postForLocation|exchange|uri)\s*\(\s*\"(/[^\"]*)\"")
+
+    def link_java_routes(self):
+        """Convention rule (like the pytest fixture one): a Spring test drives a controller
+        by URL -- `mockMvc.perform(get("/owners/new"))`, `restTemplate.getForObject("/vets", ..)`
+        -- so the handler is never named. For every test method in a .java test file, each
+        `<verb>("/path")` in its body is matched against the registered routes (method +
+        path template, `{var}` = one segment, query string ignored) and an edge
+        test -> handler is added, confidence="convention". Idempotent."""
+        routes = []
+        for f, rs in self.graph.get("routes", {}).items():
+            for r in rs:
+                if r.get("framework") != "spring":
+                    continue
+                tmpl = re.escape(r["path"])
+                tmpl = re.sub(r"\\\{[^}]*\\\}", r"[^/]+", tmpl)  # `{ownerId}` -> one segment
+                tmpl = re.sub(r"\\\*\\\*", r".*", tmpl)
+                tmpl = re.sub(r"\\\*", r"[^/]*", tmpl)
+                routes.append((re.compile("^" + tmpl + "/?$"), r["method"], f, r["handler"], r["path"].count("{") + r["path"].count("*")))
+        if not routes:
+            return 0
+        have = set()
+        for e in self.graph.get("execution_edges", []):
+            if e.get("via") == "route":
+                have.add((e["from"].get("file"), e["from"].get("function"), e["to"].get("file"), e["to"].get("function")))
+        root = getattr(self, "project_root", None) or ""
+        verbs = {"get": "GET", "getForObject": "GET", "getForEntity": "GET", "post": "POST", "postForObject": "POST",
+                 "postForEntity": "POST", "postForLocation": "POST", "put": "PUT", "delete": "DELETE", "patch": "PATCH",
+                 "options": "OPTIONS", "head": "HEAD", "multipart": "POST"}
+        n = 0
+        for f, fns in self.graph["functions"].items():
+            if not f.endswith(".java"):
+                continue
+            tests = [fn for fn in fns if isinstance(fn, dict) and fn.get("is_test") and fn.get("kind") != "class" and fn.get("start_line")]
+            if not tests:
+                continue
+            try:
+                with open(os.path.join(root, f), "r", encoding="utf-8", errors="replace") as fh:
+                    lines = fh.read().split("\n")
+            except OSError:
+                continue
+            for fn in tests:
+                body = "\n".join(lines[fn["start_line"] - 1:fn.get("end_line") or fn["start_line"]])
+                for verb, url in self._JAVA_TEST_REQUEST_RE.findall(body):
+                    method = verbs.get(verb)  # None for uri()/exchange(): any method
+                    path = url.split("?", 1)[0]
+                    hits = [(wild, rf, handler) for rx, rmethod, rf, handler, wild in routes
+                            if rx.match(path) and (not method or rmethod in ("ANY", method))]
+                    if not hits:
+                        continue
+                    best = min(w for w, _, _ in hits)  # Spring: literal segments beat {variables}
+                    for wild, rf, handler in hits:
+                        if wild != best:
+                            continue
+                        key = (f, fn["name"], rf, handler["function"])
+                        if key in have:
+                            continue
+                        have.add(key)
+                        from_node = {"type": "FUNCTION", "file": f, "function": fn["name"]}
+                        if fn.get("class"):
+                            from_node["class"] = fn["class"]
+                        to_node = {"type": "FUNCTION", "file": rf, "function": handler["function"]}
+                        if handler.get("class"):
+                            to_node["class"] = handler["class"]
+                        self.add_execution_edge(from_node=from_node, to_node=to_node, edge_type="FUNCTION_CALL", is_test=True)
+                        self.graph["execution_edges"][-1]["confidence"] = "convention"
+                        self.graph["execution_edges"][-1]["via"] = "route"
+                        n += 1
+        return n
+
+    def link_implementations(self):
+        """Java: a call through an interface or superclass type (`owners.findPet(n)` where
+        `owners` is an `OwnerRepository`) lands on the declaring method; the code that runs is
+        the override in an implementing / extending class. Edge `I.m -> C.m` for every class C
+        that declares m and lists I among its superclass/interfaces, confidence="dispatch".
+        Idempotent; only for classes with a declared parent (no name-based guessing)."""
+        parents = []  # (impl file, impl class, parent name)
+        for f, cs in self.graph["classes"].items():
+            if not f.endswith(".java"):
+                continue
+            for cname, entry in cs.items():
+                for p in [entry.get("superclass")] + list(entry.get("interfaces") or []):
+                    if p:
+                        parents.append((f, cname, p))
+        if not parents:
+            return 0
+        have = set()
+        for e in self.graph.get("execution_edges", []):
+            if e.get("via") == "implementation":
+                have.add((e["from"].get("file"), e["from"].get("class"), e["from"].get("function"), e["to"].get("file"), e["to"].get("class")))
+        n = 0
+        for f, cname, p in parents:
+            pf = self.resolve_class_file(f, p)
+            if not pf:
+                continue
+            for fn in self.graph["functions"].get(f, []):
+                if not isinstance(fn, dict) or fn.get("class") != cname or fn.get("kind") == "class":
+                    continue
+                m = fn["name"]
+                if m == cname:
+                    continue  # constructors are not overrides
+                pmeta = self.function_index.resolve_function(pf, f"{p}.{m}")
+                if not pmeta:
+                    continue
+                key = (pf, p, m, f, cname)
+                if key in have:
+                    continue
+                have.add(key)
+                self.add_execution_edge(from_node={"type": "FUNCTION", "file": pf, "function": m, "class": p},
+                                        to_node={"type": "FUNCTION", "file": f, "function": m, "class": cname},
+                                        edge_type="FUNCTION_CALL", is_test=False)
+                self.graph["execution_edges"][-1]["confidence"] = "dispatch"
+                self.graph["execution_edges"][-1]["via"] = "implementation"
+                n += 1
+        return n
+
     def link_constant_uses(self):
         """Edge function -> constant for every module-level constant a function body reads,
         in its own file or imported by name (`from dj.global_settings import
@@ -1594,11 +1748,25 @@ class GraphBuilder:
             # local aliases of imports that reach NO project file: `import * as R from 'ramda'`,
             # `const fs = require('fs')`, `import json`, `from os import path`
             external = {}
+            star_external = []  # Java `import static org.assertj...Assertions.*`: any bare name
+            is_java = file_path.endswith(".java")
             for imp in self.graph["imports"].get(file_path, []):
                 src = imp.get("source") or ""
+                if is_java:
+                    if not src or imp.get("file") is not None:
+                        continue
+                    label = ".".join(src.split(".")[:2])  # org.junit / java.util / org.springframework
+                    if imp.get("name") == "*":
+                        star_external.append(label)
+                    else:
+                        external[src.split(".")[-1]] = label
+                    continue
                 alias = imp.get("alias") or imp.get("name") or (src.split(".")[0] if src and not src.startswith(".") else None)
                 if alias and src and imp.get("file") is None:
                     external[alias] = src.split("/")[0]
+            if is_java:
+                for n in self._JAVA_LANG_NAMES:
+                    external.setdefault(n, "java.lang")
             for call in calls:
                 if call.get("resolved_function"):
                     continue
@@ -1615,6 +1783,9 @@ class GraphBuilder:
                         call["external"] = "builtin"
                     elif func in external:
                         call["external"] = external[func]
+                    elif star_external and not self.function_index.resolve_function(file_path, func):
+                        # `assertThat(..)` under `import static ...Assertions.*`
+                        call["external"] = star_external[0] if len(star_external) == 1 else "static-import"
                     continue
                 if not recv or not func or recv in ("this", "super", "self"):
                     continue
@@ -1625,6 +1796,31 @@ class GraphBuilder:
                     call["external"] = external[root]
                     continue
                 caller = call.get("caller_function") or "GLOBAL"
+                if is_java and "(" not in recv:
+                    # a variable whose DECLARED type is a library class (`List<Owner> results`
+                    # -> results.isEmpty(), `MockMvc mockMvc` -> mockMvc.perform(..)): the
+                    # call is in the library, say so
+                    rt = self.symbol_table.resolve_type(file_path, caller, root) if root == recv else None
+                    if not rt and recv.startswith("this.") and recv.count(".") == 1 and call.get("caller_class"):
+                        rt = self.resolve_field_type(file_path, call["caller_class"], recv.split(".", 1)[1])
+                    if rt and rt in external and not self.resolve_class_file(file_path, rt):
+                        call["external"] = external[rt]
+                        continue
+                elif is_java:
+                    # a chain that STARTS outside the project stays outside: `status().isOk()`,
+                    # `get("/x").param(..)`, `mockMvc.perform(..).andExpect(..)`
+                    head = re.match(r"^([A-Za-z_$][\w$]*)\s*(\(|\.)", recv)
+                    root0 = head.group(1) if head else None
+                    label = None
+                    if root0 and head.group(2) == "(" and not self.function_index.resolve_function(file_path, root0)                             and not self.resolve_class_file(file_path, root0):
+                        label = external.get(root0) or (star_external[0] if len(star_external) == 1 else ("static-import" if star_external else None))
+                    elif root0 and head.group(2) == ".":
+                        rt = self.symbol_table.resolve_type(file_path, caller, root0)
+                        if rt and rt in external and not self.resolve_class_file(file_path, rt):
+                            label = external[rt]
+                    if label:
+                        call["external"] = label
+                        continue
                 typed_file = typed_meta = typed_class = None
                 if "(" in recv and recv.endswith(")"):
                     # `session().get()` / `self.factory().run()`: the receiver is a call whose
@@ -2095,8 +2291,11 @@ class GraphBuilder:
             metadata["parent"] = sm.get("function.parent")  # enclosing def of a nested def
         if sm.get("function.return_type"):
             metadata["return_type"] = sm.get("function.return_type")  # annotation or docstring
-        if getattr(sm, "is_test", False):
-            metadata["is_test"] = True
+        if getattr(sm, "is_test", False) or sm.get("function.is_test"):
+            metadata["is_test"] = True  # test dir, or a JUnit @Test
+        if sm.get("function.annotations"):
+            metadata["annotations"] = dict(sm.get("function.annotations"))
+            self._java_route_from_annotations(sm, function_name, owner_class, metadata["annotations"])
 
         # Methods are registered under their qualified name too, so `this.x()` / `obj.x()`
         # with a known receiver type resolve to THIS class's x, not whichever x was seen last.
@@ -2144,6 +2343,12 @@ class GraphBuilder:
         sup = sm.get("class.superclass")
         if sup and not entry.get("superclass"):
             entry["superclass"] = sup
+        if sm.get("class.interfaces"):
+            entry["interfaces"] = list(sm.get("class.interfaces"))
+        if sm.get("class.interface"):
+            entry["interface"] = True
+        if sm.get("class.annotations"):
+            entry["annotations"] = dict(sm.get("class.annotations"))
         if not self.function_index.resolve_function(sm.file_path, name):
             self.ensure_file("functions", sm.file_path)
             metadata = {"name": name, "file": sm.file_path, "start_line": sm.start_point[0] + 1,
@@ -2288,6 +2493,12 @@ class GraphBuilder:
         elif resolved_type:
             typed_file, typed_meta = self.resolve_method(sm.file_path, resolved_type, func)
             typed_class = resolved_type
+        elif not raw_object_name and sm.file_path.endswith(".java") and getattr(sm, "owner_class", None) \
+                and not self.symbol_table.resolve_import(sm.file_path, func):
+            # Java implicit `this`: a bare `getPets()` inside class Owner is `this.getPets()`
+            # (walking superclasses); a static import of the same name wins
+            typed_file, typed_meta = self.resolve_method(sm.file_path, sm.owner_class, func)
+            typed_class = sm.owner_class
         elif isinstance(raw_object_name, str) and raw_object_name[:1].isupper() and "." not in raw_object_name \
                 and self.resolve_class_file(sm.file_path, raw_object_name):
             # `Lexer.lex(src)`: the receiver is the class -> static method preferred
@@ -3827,8 +4038,13 @@ class GraphBuilder:
             # (`CHECKER_CLASS = VariablesChecker`) can be resolved later
             entry = self.graph["classes"].setdefault(sm.file_path, {}).setdefault(sm.get("assign.class"), {"superclass": None})
             entry.setdefault("attrs", {})[variable] = (value or "").strip()
+            if sm.get("field.type"):
+                # Java `private final OwnerRepository owners;` -> `this.owners.x()` is typed
+                entry.setdefault("fields", {})[variable] = sm.get("field.type")
         
         class_name = sm.get("assign.type") or sm.get("assign.value_type") or sm.get("field.type")
+        if class_name == "var":
+            class_name = None  # Java `var x = new Owner()`: the value decides
         if not class_name and value:
             from semantic_core.symbol_resolver import SymbolResolver
             class_name = SymbolResolver.extract_instantiated_class(value)

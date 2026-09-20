@@ -19,7 +19,9 @@ from config.debug_flags import DEBUG_GRAPH_BUILD
 from utils.logger import logger
 
 
-_CLASS_NODE_TYPES = {"class_declaration", "class", "class_expression", "abstract_class_declaration"}
+_CLASS_NODE_TYPES = {"class_declaration", "class", "class_expression", "abstract_class_declaration",
+                     "interface_declaration", "enum_declaration", "record_declaration"}  # Java kinds too
+_CLASS_BODY_TYPES = {"class_body", "interface_body", "enum_body"}
 _NOT_A_CLASS = {"module", "exports", "window", "global", "globalThis", "self", "this", "document", "process", "console"}
 
 
@@ -55,8 +57,71 @@ def _class_name_of(class_node):
     return None
 
 
+def _java_interfaces_of(class_node):
+    """`class X implements A, B` / `interface X extends A, B` -> ["A", "B"] (Java only)."""
+    out = []
+    for ch in class_node.children:
+        if ch.type in ("super_interfaces", "extends_interfaces"):
+            for sub in ch.named_children:  # type_list
+                for leaf in (sub.named_children or [sub]):
+                    if leaf.type in ("type_identifier", "scoped_type_identifier"):
+                        out.append(_text(leaf).split(".")[-1])
+                    elif leaf.type == "generic_type":
+                        base = leaf.named_children[0] if leaf.named_children else None
+                        if base is not None:
+                            out.append(_text(base).split(".")[-1])
+    return out
+
+
+def _java_annotations(node):
+    """`@GetMapping("/owners/new")`, `@RequestMapping(value = "/x", method = GET)`, `@Test`
+    on a Java class / method -> {"GetMapping": "/owners/new", "Test": None, ...}: the first
+    string argument, or the `value=`/`path=` one."""
+    out = {}
+    mods = next((c for c in node.children if c.type == "modifiers"), None)
+    if mods is None:
+        return out
+    for a in mods.children:
+        if a.type not in ("annotation", "marker_annotation"):
+            continue
+        nm = a.child_by_field_name("name")
+        if nm is None:
+            continue
+        name = _text(nm).split(".")[-1]
+        val = None
+        args = a.child_by_field_name("arguments")
+        if args is not None:
+            for arg in args.named_children:
+                if arg.type == "string_literal":
+                    val = _text(arg).strip('"')
+                    break
+                if arg.type == "element_value_pair":
+                    k = arg.child_by_field_name("key")
+                    v = arg.child_by_field_name("value")
+                    if k is not None and _text(k) in ("value", "path") and v is not None:
+                        if v.type == "string_literal":
+                            val = _text(v).strip('"')
+                        elif v.type == "element_value_array_initializer":
+                            first = next((c for c in v.named_children if c.type == "string_literal"), None)
+                            val = _text(first).strip('"') if first is not None else None
+                        break
+                if arg.type == "element_value_array_initializer":
+                    first = next((c for c in arg.named_children if c.type == "string_literal"), None)
+                    val = _text(first).strip('"') if first is not None else None
+                    break
+        out[name] = val
+    return out
+
+
 def _superclass_of(class_node):
     for ch in class_node.children:
+        if ch.type == "superclass":
+            # Java: `class Owner extends Person` / `extends NamedEntity<T>`
+            for leaf in ch.named_children:
+                if leaf.type in ("type_identifier", "scoped_type_identifier"):
+                    return _text(leaf)
+                if leaf.type == "generic_type" and leaf.named_children:
+                    return _text(leaf.named_children[0])
         if ch.type == "class_heritage":
             for sub in ch.children:
                 if sub.type in ("identifier", "member_expression", "type_identifier"):
@@ -95,7 +160,7 @@ def find_owner_class(func_node):
         par = node.parent
         if par is None:
             break
-        if par.type == "class_body" and par.parent is not None and par.parent.type in _CLASS_NODE_TYPES:
+        if par.type in _CLASS_BODY_TYPES and par.parent is not None and par.parent.type in _CLASS_NODE_TYPES:
             return _class_name_of(par.parent), _superclass_of(par.parent)
         # Python: function_definition [-> decorated_definition] -> block -> class_definition
         if par.type == "block" and par.parent is not None and par.parent.type == "class_definition":
@@ -197,8 +262,28 @@ def _python_docstring(fnode):
     return None
 
 
+_JAVA_NON_CLASS_TYPES = {"void", "int", "long", "short", "byte", "char", "boolean", "float", "double", "var"}
+
+
+def _java_type_name(tnode):
+    """`Pet` / `List<Pet>` / `Map<String, Pet>` / `pat.owner.Pet` / `Pet[]` -> the raw class
+    name (`List`, `Map`, `Pet`); None for void / primitives / `var`."""
+    if tnode is None:
+        return None
+    n = tnode
+    while n is not None and n.type in ("generic_type", "array_type"):
+        n = next((c for c in n.named_children if c.type in ("type_identifier", "scoped_type_identifier", "generic_type")), None)
+    if n is None or n.type not in ("type_identifier", "scoped_type_identifier"):
+        return None
+    name = _text(n).split(".")[-1]
+    return None if name in _JAVA_NON_CLASS_TYPES else name
+
+
 def _declared_return_type(fnode):
-    """`-> Axes` / `-> "Legend"` / `-> Optional[Axes]` on a Python def; TS `): Axes {`."""
+    """`-> Axes` / `-> "Legend"` / `-> Optional[Axes]` on a Python def; TS `): Axes {`;
+    Java `public Pet getPet(..)` (the raw type: `List<Pet>` -> List, not Pet)."""
+    if fnode.type == "method_declaration":
+        return _java_type_name(fnode.child_by_field_name("type"))
     rt = fnode.child_by_field_name("return_type")
     if rt is None:
         return None
@@ -307,6 +392,17 @@ def _ts_param_types(func_node):
     `(gear: Gear, n: int = 0)` -> {"gear": "Gear"} from annotations."""
     out = {}
     params = func_node.child_by_field_name("parameters")
+    if params is not None and params.type == "formal_parameters" and func_node.type in ("method_declaration", "constructor_declaration"):
+        # Java: `(OwnerRepository owners, int id)` -> {"owners": "OwnerRepository"}
+        for prm in params.named_children:
+            if prm.type in ("formal_parameter", "spread_parameter"):
+                t = _java_type_name(prm.child_by_field_name("type") or next((c for c in prm.named_children if c.type.endswith("type") or c.type == "type_identifier"), None))
+                ident = prm.child_by_field_name("name") or next((c for c in prm.named_children if c.type in ("identifier", "variable_declarator")), None)
+                if ident is not None and ident.type == "variable_declarator":
+                    ident = ident.child_by_field_name("name")
+                if t and ident is not None:
+                    out[_text(ident)] = t
+        return out
     if params is not None and params.type == "parameters":  # Python
         for prm in params.named_children:
             if prm.type in ("typed_parameter", "typed_default_parameter"):
@@ -686,7 +782,8 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                     par = identity_node.parent
                     hops = 0
                     while par is not None and hops < 4:
-                        if par.type in ("class_body", "block") and par.parent is not None and par.parent.type in ("class_definition", "class_declaration", "class"):
+                        if par.type in ("class_body", "interface_body", "enum_body", "block") and par.parent is not None \
+                                and par.parent.type in ("class_definition", "class_declaration", "class", "interface_declaration", "enum_declaration", "record_declaration"):
                             capture_dict["assign.class"] = _class_name_of(par.parent)
                             break
                         if par.type in ("function_definition", "function_declaration", "method_definition", "arrow_function", "function_expression"):
@@ -717,6 +814,15 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                         sup = _superclass_of(cnode)
                         if sup:
                             capture_dict["class.superclass"] = sup.split(".")[-1]
+                        ifaces = _java_interfaces_of(cnode) if cnode.type in ("class_declaration", "interface_declaration", "enum_declaration", "record_declaration") else []
+                        if ifaces:
+                            capture_dict["class.interfaces"] = ifaces
+                        if cnode.type == "interface_declaration":
+                            capture_dict["class.interface"] = True
+                        if cnode.type in ("class_declaration", "interface_declaration"):
+                            ann = _java_annotations(cnode)
+                            if ann:
+                                capture_dict["class.annotations"] = ann
                     capture_dict.pop("class.heritage", None)
 
                 if match_type == "FUNCTION_DEF":
@@ -746,6 +852,12 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                         capture_dict["function.superclass"] = sup
                     if fnode is not None and _is_static_method(fnode):
                         capture_dict["function.static"] = True
+                    if fnode is not None and fnode.type == "method_declaration":
+                        ann = _java_annotations(fnode)
+                        if ann:
+                            capture_dict["function.annotations"] = ann
+                            if "Test" in ann or "ParameterizedTest" in ann or "RepeatedTest" in ann:
+                                capture_dict["function.is_test"] = True
                     if fnode is not None:
                         fx = _is_pytest_fixture(fnode)
                         if fx:

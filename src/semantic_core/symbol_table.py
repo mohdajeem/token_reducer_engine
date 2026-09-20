@@ -250,11 +250,11 @@ class SymbolTable:
             if resolved:
                 normalized = resolved
             else:
-                fallback = os.path.normpath(os.path.join(os.path.dirname(abs_file_path), import_class + ".java")).replace("\\", "/")
-                if project_root:
-                    normalized = os.path.relpath(fallback, project_root).replace("\\", "/")
-                else:
-                    normalized = fallback
+                # JDK / Spring / JUnit: no project file. Record None so the graph marks the
+                # import (and every call through it) external instead of inventing a
+                # `<dir>/Test.java` that does not exist.
+                self.imports[file_path][import_name] = None
+                return None
         else:
             resolved = self.resolve_module_path(file_path, import_source)
             if resolved is None:

@@ -122,6 +122,8 @@ FIXTURE = {
             s.start()
             with eng_mod.Engine(Gear()) as ctx:
                 ctx.tick()
+            eng_mod.Engine(Gear()).start()
+            n = session().tick()
             return s
         """),
     "tests/test_engine.py": textwrap.dedent("""\
@@ -230,6 +232,10 @@ def main():
           c is not None and c.get("resolved_class") == "Engine" and c.get("resolution") == "typed", c)
     c = ac.get(("ctx", "tick"))
     check("`with eng_mod.Engine() as ctx` -> ctx.tick() resolves to Engine.tick", c is not None and c.get("resolved_class") == "Engine", c)
+    c = next((x for x in calls(graph, "src/pkg/app.py").values() if x.get("function") == "start" and "(" in str(x.get("receiver"))), None)
+    check("eng_mod.Engine(Gear()).start() (instantiation-expression receiver) resolves to Engine.start", c is not None and c.get("resolved_class") == "Engine", c)
+    c = next((x for x in calls(graph, "src/pkg/app.py").values() if x.get("function") == "tick" and str(x.get("receiver")).startswith("session(")), None)
+    check("session().tick() (call-expression receiver, factory return type) resolves to Engine.tick", c is not None and c.get("resolved_class") == "Engine", c)
 
     # ---------- 4. external
     c = ac.get(("json", "dumps"))

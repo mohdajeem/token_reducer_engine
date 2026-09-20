@@ -855,6 +855,7 @@ class GraphBuilder:
             if t:
                 ret.setdefault((f, fn), set()).add(t)
         ret = {k: next(iter(v)) for k, v in ret.items() if len(v) == 1}
+        self._return_types = ret
         if not ret:
             return 0
         call_target = {}
@@ -878,6 +879,29 @@ class GraphBuilder:
                 self.symbol_table.register_type(f, scope, var, t)
                 n += 1
         return n
+
+    def _return_type_of_call(self, file_path, caller, recv_expr):
+        """Type of the value a call expression evaluates to: the class it instantiates, or
+        the return type of the function it resolves to (same file + caller, matched by
+        callee name), if known."""
+        import re as _re
+        from semantic_core.symbol_resolver import SymbolResolver
+        expr = recv_expr.strip()
+        inst = SymbolResolver.extract_instantiated_class(expr)
+        if inst and self.resolve_class_file(file_path, inst):
+            return inst
+        m = _re.match(r"^(?:await\s+)?(?:[\w$]+\.)*([\w$]+)\s*\(", expr)
+        if not m:
+            return None
+        name = m.group(1)
+        ret = getattr(self, "_return_types", None) or {}
+        scope_caller = caller if caller != "GLOBAL" else None
+        for c in self.graph["calls"].get(file_path, []):
+            if c.get("function") == name and (c.get("caller_function") or None) == scope_caller and c.get("resolved_function"):
+                t = ret.get((c.get("resolved_file"), c["resolved_function"].get("name")))
+                if t:
+                    return t
+        return None
 
     def resolve_pending_calls(self):
         """Final pass over calls that stayed unresolved: receiver types learned late (argument
@@ -919,7 +943,14 @@ class GraphBuilder:
                     continue
                 caller = call.get("caller_function") or "GLOBAL"
                 typed_file = typed_meta = typed_class = None
-                if "." not in recv:
+                if "(" in recv and recv.endswith(")"):
+                    # `session().get()` / `self.factory().run()`: the receiver is a call whose
+                    # return type infer_types_from_returns learned
+                    t = self._return_type_of_call(file_path, caller, recv)
+                    if t:
+                        typed_file, typed_meta = self.resolve_method(file_path, t, func)
+                        typed_class, how = t, "typed"
+                if not typed_meta and "." not in recv:
                     t = self.symbol_table.resolve_type(file_path, caller, recv)
                     if t:
                         typed_file, typed_meta = self.resolve_method(file_path, t, func)
@@ -1489,6 +1520,14 @@ class GraphBuilder:
             # `Lexer.lex(src)`: the receiver is the class -> static method preferred
             typed_file, typed_meta = self.resolve_method(sm.file_path, raw_object_name, func, _want_static=True)
             typed_class = raw_object_name
+        elif isinstance(raw_object_name, str) and "(" in raw_object_name:
+            # `requests.Request('GET', url).prepare()` / `new Lexer(opts).lex()`: the receiver
+            # is an instantiation expression -> a method of that class
+            from semantic_core.symbol_resolver import SymbolResolver
+            inst = SymbolResolver.extract_instantiated_class(raw_object_name)
+            if inst and self.resolve_class_file(sm.file_path, inst):
+                typed_file, typed_meta = self.resolve_method(sm.file_path, inst, func)
+                typed_class = inst
         if typed_meta:
             self.ensure_file("calls", sm.file_path)
             call_id = self.build_call_id(sm)

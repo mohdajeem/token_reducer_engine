@@ -180,6 +180,9 @@ class GraphBuilder:
         # PASS 3 — FUNCTION DEFINITIONS
         # ======================================================
 
+        for sm in semantic_matches:
+            if sm.match_type == "CLASS_DEF":
+                self.handle_class_def(sm)
 
         for sm in semantic_matches:
 
@@ -311,11 +314,14 @@ class GraphBuilder:
         # nothing new resolves (bounded) so the result does not depend on how many times
         # finalize() has run -- an incremental update must land on the same graph as a full
         # build. Rounds after the first only cost the flow/inference passes (no re-parse).
+        # variable states first: return-type inference reads `v = f()` assignments from them
+        self.track_variable_states()
         for _round in range(4):
             before = sum(1 for calls in self.graph["calls"].values() for c in calls if c.get("resolved_function"))
             self.graph["data_flow"] = []
             self.build_argument_parameter_flow()
             self.infer_parameter_types_from_flow()
+            self.infer_types_from_returns()
             self.resolve_pending_calls()
             after = sum(1 for calls in self.graph["calls"].values() for c in calls if c.get("resolved_function"))
             if after == before:
@@ -822,6 +828,57 @@ class GraphBuilder:
             cls._BUILTIN_METHOD_NAMES = names
         return cls._BUILTIN_METHOD_NAMES
 
+    def infer_types_from_returns(self):
+        """`def session(): return Session()` types `s` in `s = session()`; `return self`
+        types fluent chains; `return x` with a typed local x too. Return types are learned
+        from the `returns` records, then applied to every `v = f(...)` / `v = obj.f(...)`
+        assignment whose call already resolved. Runs inside the finalize fixpoint, so a
+        variable typed here can resolve calls that type further variables next round."""
+        import re as _re
+        from semantic_core.symbol_resolver import SymbolResolver
+        owner_class = {}
+        for f, fns in self.graph["functions"].items():
+            for fn in fns:
+                if isinstance(fn, dict) and fn.get("class"):
+                    owner_class.setdefault((f, fn["name"]), set()).add(fn["class"])
+        ret = {}
+        for r in self.graph.get("returns", []):
+            f, fn, val = r.get("file"), r.get("function"), (r.get("value") or "").strip()
+            if not fn or not val:
+                continue
+            t = SymbolResolver.extract_instantiated_class(val)
+            if not t and val in ("self", "this"):
+                cs = owner_class.get((f, fn)) or set()
+                t = next(iter(cs)) if len(cs) == 1 else None
+            if not t and _re.match(r"^[A-Za-z_$][\w$]*$", val):
+                t = self.symbol_table.resolve_type(f, fn, val)
+            if t:
+                ret.setdefault((f, fn), set()).add(t)
+        ret = {k: next(iter(v)) for k, v in ret.items() if len(v) == 1}
+        if not ret:
+            return 0
+        call_target = {}
+        for f, calls in self.graph["calls"].items():
+            for c in calls:
+                rf = c.get("resolved_function")
+                if isinstance(rf, dict) and c.get("function") and rf.get("kind") != "class":
+                    call_target.setdefault((f, c.get("caller_function") or "GLOBAL_SCOPE", c["function"]),
+                                           (c.get("resolved_file"), rf.get("name")))
+        n = 0
+        for vs in self.graph.get("variable_states", []):
+            var, val, f, fn = vs.get("variable"), vs.get("value") or "", vs.get("file"), vs.get("function") or "GLOBAL_SCOPE"
+            scope = "GLOBAL" if fn == "GLOBAL_SCOPE" else fn
+            if not var or self.symbol_table.resolve_type(f, scope, var):
+                continue
+            m = _re.match(r"^(?:await\s+)?(?:[\w$]+\.)*([\w$]+)\s*\(", val)
+            if not m:
+                continue
+            t = ret.get(call_target.get((f, fn, m.group(1)), (None, None)))
+            if t:
+                self.symbol_table.register_type(f, scope, var, t)
+                n += 1
+        return n
+
     def resolve_pending_calls(self):
         """Final pass over calls that stayed unresolved: receiver types learned late (argument
         flow), then a unique-method-name fallback. Fallback resolutions are flagged
@@ -1318,6 +1375,41 @@ class GraphBuilder:
     # CALLS
     # ======================================================
 
+    def handle_class_def(self, sm):
+        """JS/TS `class X [extends Y]`: a class node (kind="class") so `new X()` resolves to
+        it, plus the classes registry entry (superclass for `super` and inheritance)."""
+        name = sm.get("class.name")
+        if not name:
+            return
+        entry = self.graph["classes"].setdefault(sm.file_path, {}).setdefault(name, {"superclass": None})
+        sup = sm.get("class.superclass")
+        if sup and not entry.get("superclass"):
+            entry["superclass"] = sup
+        if not self.function_index.resolve_function(sm.file_path, name):
+            self.ensure_file("functions", sm.file_path)
+            metadata = {"name": name, "file": sm.file_path, "start_line": sm.start_point[0] + 1,
+                        "end_line": sm.end_point[0] + 1, "kind": "class"}
+            if getattr(sm, "is_test", False):
+                metadata["is_test"] = True
+            self.function_index.register_function(file_path=sm.file_path, function_name=name, metadata=metadata)
+            self.graph["functions"][sm.file_path].append(dict(metadata))
+
+    def _constructor_edge(self, from_node, resolved_file, resolved_function, is_test, call_id):
+        """A call that resolves to a class node is a call of its constructor: add the edge to
+        `X.__init__` / `X.constructor` (walking superclasses) so a change to a constructor
+        reaches every instantiation. Flagged via="constructor"."""
+        if not isinstance(resolved_function, dict) or resolved_function.get("kind") != "class":
+            return
+        cls = resolved_function.get("name")
+        for ctor in ("__init__", "constructor"):
+            cf, cm = self.resolve_method(resolved_file, cls, ctor)
+            if cm:
+                self.add_execution_edge(from_node=dict(from_node),
+                                        to_node={"type": "FUNCTION", "file": cf, "function": ctor, "class": cm.get("class") or cls},
+                                        edge_type="FUNCTION_CALL", is_test=is_test, call_id=call_id)
+                self.graph["execution_edges"][-1]["via"] = "constructor"
+                return
+
     def handle_call(self, sm):
         # print("\nCALL MATCH")
         # print("start:", sm.start_byte)
@@ -1349,7 +1441,7 @@ class GraphBuilder:
 
         func = sm.get(
             "call.func_name"
-        )
+        ) or sm.get("call.new_class")
         # name the callee is DEFINED under when it differs from the local call name
         # (`import { helper as h }` -> h() targets helper)
         target_name = func
@@ -1620,13 +1712,16 @@ class GraphBuilder:
             }
             if isinstance(resolved_function, dict) and resolved_function.get("class"):
                 to_node["class"] = resolved_function["class"]
+            _cid = self.graph["calls"][sm.file_path][-1].get("call_id")
             self.add_execution_edge(
                 from_node=self._from_node(sm),
                 to_node=to_node,
                 edge_type="FUNCTION_CALL",
                 is_test=getattr(sm, "is_test", False),
-                call_id=self.graph["calls"][sm.file_path][-1].get("call_id"),
+                call_id=_cid,
             )
+            self._constructor_edge(self._from_node(sm), resolved_file, resolved_function,
+                                   bool(getattr(sm, "is_test", False)), _cid)
 
     def _from_node(self, sm):
         """The calling function as an edge endpoint: file + bare name, plus the specific

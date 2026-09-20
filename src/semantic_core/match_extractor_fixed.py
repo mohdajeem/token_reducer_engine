@@ -440,7 +440,10 @@ def normalize_call_expression(nodes):
         current = node
 
         while current:
-            if current.type == "call_expression":
+            # `new X()` is the call only for its own constructor capture; an argument
+            # `wrap(new X())` still belongs to wrap(...)
+            if current.type == "call_expression" or (
+                    current.type == "new_expression" and current.child_by_field_name("constructor") == node):
                 call_node = current
                 break
 
@@ -585,6 +588,15 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                     capture_dict["reexport.source"] = rx["source"]
                     capture_dict["reexport.star"] = rx["star"]
                     capture_dict["reexport.names"] = rx["names"]
+
+                if match_type == "CLASS_DEF":
+                    cnode = match_dict.get("class.node")
+                    cnode = cnode[0] if isinstance(cnode, list) else cnode
+                    if cnode is not None:
+                        sup = _superclass_of(cnode)
+                        if sup:
+                            capture_dict["class.superclass"] = sup.split(".")[-1]
+                    capture_dict.pop("class.heritage", None)
 
                 if match_type == "FUNCTION_DEF":
                     fnode = match_dict.get("function.node")

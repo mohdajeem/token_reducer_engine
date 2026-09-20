@@ -14,10 +14,10 @@ class MockTraversalEngine:
         self.downstream_nodes = []
         self.edges = []
         
-    def find_upstream_nodes(self, target_node):
+    def find_upstream_nodes(self, target_node, **kwargs):
         return self.upstream_nodes
         
-    def find_downstream_nodes(self, target_node):
+    def find_downstream_nodes(self, target_node, **kwargs):
         return self.downstream_nodes
         
     def node_equals(self, node1, node2):

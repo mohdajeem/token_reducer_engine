@@ -100,6 +100,12 @@ def classify_match(capture_names):
     # for function 
     if "function.name" in capture_set:
         return "FUNCTION_DEF"
+
+    if "class.name" in capture_set:
+        return "CLASS_DEF"
+
+    if "call.new_class" in capture_set:
+        return "CALL"
     
 
     # ======================================================

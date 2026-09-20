@@ -354,6 +354,7 @@ def mcp_query_context(
             combined_snippets = []
             seen_snippet_keys = set()
             combined_chains = []
+            combined_files = []
 
             for single_target in target_list:
                 try:
@@ -390,6 +391,10 @@ def mcp_query_context(
                 for chain in context.get("execution_chains", []):
                     if chain not in combined_chains:
                         combined_chains.append(chain)
+                for fpath in context.get("relevant_files", []):
+                    rel_f = str(fpath).replace("\\", "/")
+                    if rel_f not in combined_files:
+                        combined_files.append(rel_f)
 
                 log_query_telemetry(repo_path, single_target, policy, context)
 
@@ -399,7 +404,8 @@ def mcp_query_context(
             return {
                 "target_count": len(target_list),
                 "code_snippets": combined_snippets,
-                "execution_chains": combined_chains
+                "execution_chains": combined_chains,
+                "relevant_files": combined_files,
             }
         except Exception as e:
             return {"error": f"Failed to query context: {e}"}

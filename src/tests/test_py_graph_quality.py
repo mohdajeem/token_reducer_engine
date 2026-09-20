@@ -111,6 +111,18 @@ FIXTURE = {
             x.warm_up()
             x.spin()
             return pkg.core.parts.Gear()
+
+
+        def session():
+            return eng_mod.Engine(Gear())
+
+
+        def use_factory():
+            s = session()
+            s.start()
+            with eng_mod.Engine(Gear()) as ctx:
+                ctx.tick()
+            return s
         """),
     "tests/test_engine.py": textwrap.dedent("""\
         from pkg import boot
@@ -206,6 +218,18 @@ def main():
 
     c = ac.get(("pkg.core.parts", "Gear"))
     check("`import pkg.core.parts` then pkg.core.parts.Gear() resolves", c is not None and c.get("resolved_file") == "src/pkg/core/parts.py", c)
+
+    # ---------- 3c. blast radius through constructors, factories and `with ... as`
+    ctor = [e for e in graph["execution_edges"] if e.get("via") == "constructor" and e["to"].get("function") == "__init__" and e["to"].get("class") == "Engine"]
+    check("Engine(...) also gets an edge to Engine.__init__ (via=constructor)", len(ctor) >= 1, ctor[:2])
+    srv.SERVER_STATE["graph"] = graph; srv.SERVER_STATE["repo_path"] = str(root)
+    ia = srv.mcp_impact_analysis(target=f"FUNCTION:{E}:Engine.__init__", direction="UPSTREAM", max_depth=1)
+    check("impact of Engine.__init__ lists boot() which instantiates Engine", any(n.get("function") == "boot" for n in ia.get("upstream_nodes", [])), ia.get("upstream_nodes"))
+    c = ac.get(("s", "start"))
+    check("s = session() where session() returns Engine(...) -> s.start() resolves to Engine.start (return-type inference)",
+          c is not None and c.get("resolved_class") == "Engine" and c.get("resolution") == "typed", c)
+    c = ac.get(("ctx", "tick"))
+    check("`with eng_mod.Engine() as ctx` -> ctx.tick() resolves to Engine.tick", c is not None and c.get("resolved_class") == "Engine", c)
 
     # ---------- 4. external
     c = ac.get(("json", "dumps"))

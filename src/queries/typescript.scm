@@ -271,9 +271,22 @@
   arguments: (arguments (_) @arg.value)
 )
 
+; `new X()` is a call of X's constructor: it gets a call record (resolved to the class
+; node, plus a constructor edge) so changing a constructor shows every instantiation.
 (new_expression
-  constructor: (identifier) @call.class_name
+  constructor: (identifier) @call.new_class
 )
+
+; Class declarations become class nodes (kind="class") so `new X()` / `X()` resolve to
+; them even when X has no methods, and the superclass is known for `super` / inheritance.
+(class_declaration
+  name: (type_identifier) @class.name
+  (class_heritage)? @class.heritage
+) @class.node
+(class
+  name: (type_identifier) @class.name
+  (class_heritage)? @class.heritage
+) @class.node
 
 ; =============================================================================
 ; 7. VARIABLES, ALIASES & DESTRUCTURING

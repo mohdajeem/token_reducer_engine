@@ -61,9 +61,13 @@ class PolicyTraversalEngine:
             }
 
         elif policy == TraversalPolicy.SIGNATURE_CHANGE:
+            # a changed signature breaks the callers, not the callees: direct callers by
+            # default (deeper only when asked), callees only when explicitly asked for
             effective_depth = max_depth if max_depth is not None else 1
             all_upstream = self.traversal_engine.find_upstream_nodes(target_node, max_depth=effective_depth, include_types=include_types) if direction in ("UPSTREAM", "BOTH") else []
-            all_downstream = self.traversal_engine.find_downstream_nodes(target_node, max_depth=effective_depth, include_types=include_types) if direction in ("DOWNSTREAM", "BOTH") else []
+            if max_depth is None:
+                all_upstream = [e for e in all_upstream if self.traversal_engine.node_equals(e.get("to") or {}, target_node)]
+            all_downstream = self.traversal_engine.find_downstream_nodes(target_node, max_depth=effective_depth, include_types=include_types) if direction == "DOWNSTREAM" else []
             return {
                 "target": target_node,
                 "upstream": all_upstream,

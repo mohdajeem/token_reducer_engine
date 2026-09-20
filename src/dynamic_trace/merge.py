@@ -114,11 +114,36 @@ def merge_trace(graph, trace, repo_root=None, max_tests_per_edge=5):
         if te.get("test") and te["test"] not in e["tests"] and len(e["tests"]) < max_tests_per_edge:
             e["tests"].append(te["test"])
     graph.setdefault("execution_edges", []).extend(merged.values())
+    demoted = prune_fanout(graph)
     summary = {"recorded_at": trace.get("recorded_at"), "tests": trace.get("tests"),
                "edges_added": added, "static_edges_observed": annotated, "edges_skipped_unknown_node": skipped,
-               "stale_files": sorted(stale)}
+               "fanout_edges_demoted": demoted, "stale_files": sorted(stale)}
     graph["_trace"] = summary
     return summary
+
+
+def prune_fanout(graph):
+    """A dispatch-table / getattr call site links to every candidate (confidence dispatch
+    or dynamic). When the trace saw that call site fire -- at least one candidate edge of
+    the same call_id is observed -- the candidates it did NOT fire are demoted to
+    confidence="unobserved" (the static guess is kept under static_confidence). A call
+    site the trace never executed is left alone: no evidence, no demotion. Idempotent."""
+    groups = {}
+    for e in graph.get("execution_edges", []):
+        if e.get("call_id") and (e.get("confidence") in ("dispatch", "dynamic", "candidates") or e.get("static_confidence")):
+            groups.setdefault(e["call_id"], []).append(e)
+    demoted = 0
+    for cid, edges in groups.items():
+        if not any(x.get("observed") for x in edges):
+            continue
+        for x in edges:
+            if x.get("observed"):
+                continue
+            if x.get("confidence") != "unobserved":
+                x["static_confidence"] = x.get("confidence")
+                x["confidence"] = "unobserved"
+                demoted += 1
+    return demoted
 
 
 def trace_path_for(cache_dir):

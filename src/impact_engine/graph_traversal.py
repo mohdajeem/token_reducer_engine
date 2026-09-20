@@ -1,5 +1,22 @@
 from collections import deque
 
+# How much to trust an edge, highest first. "observed": seen in a dynamic trace (or a static
+# edge the trace confirmed). "resolved": a plain static resolution. "name-unique" /
+# "candidates" / "dispatch" / "dynamic": a static guess with several possible targets.
+# "unobserved": one of those guesses that the trace contradicted (the caller ran, and
+# called a sibling candidate instead).
+CONFIDENCE_RANK = {"observed": 4, "resolved": 3, "name-unique": 2, "candidates": 2, "dispatch": 2, "dynamic": 2, "unobserved": 1}
+
+
+def edge_confidence(edge):
+    if edge.get("observed") or edge.get("source") == "trace":
+        return "observed"
+    return edge.get("confidence") or "resolved"
+
+
+def edge_rank(edge):
+    return CONFIDENCE_RANK.get(edge_confidence(edge), 2)
+
 
 class GraphTraversal:
     """
@@ -20,12 +37,15 @@ class GraphTraversal:
         # query answers "what production code depends on this"; tests are surfaced on
         # request (include_tests=True / mcp_tests_for).
         self.include_tests = False
+        # minimum confidence an edge needs to be followed (None = follow everything);
+        # a consumer that wants only certain callers asks for "resolved" and widens if empty
+        self.min_confidence = None
 
     # ======================================================
     # FIND UPSTREAM NODES
     # ======================================================
 
-    def find_upstream_nodes(self, target_node, max_depth=None, include_types=None, include_tests=None):
+    def find_upstream_nodes(self, target_node, max_depth=None, include_types=None, include_tests=None, min_confidence=None):
         """
         Performs a backward BFS traversal from the target node to locate upstream callers.
         
@@ -58,6 +78,9 @@ class GraphTraversal:
                     continue
                 if edge.get("is_test") and not (self.include_tests if include_tests is None else include_tests):
                     continue
+                _minc = self.min_confidence if min_confidence is None else min_confidence
+                if _minc and edge_rank(edge) < CONFIDENCE_RANK.get(_minc, 0):
+                    continue
 
                 to_node = edge["to"]
                 from_node = edge["from"]
@@ -86,7 +109,7 @@ class GraphTraversal:
     # FIND DOWNSTREAM NODES
     # ======================================================
 
-    def find_downstream_nodes(self, target_node, max_depth=None, include_types=None, include_tests=None):
+    def find_downstream_nodes(self, target_node, max_depth=None, include_types=None, include_tests=None, min_confidence=None):
         """
         Performs a forward BFS traversal from the target node to locate downstream dependents.
         
@@ -118,6 +141,9 @@ class GraphTraversal:
                 if include_types and edge["type"] not in include_types:
                     continue
                 if edge.get("is_test") and not (self.include_tests if include_tests is None else include_tests):
+                    continue
+                _minc = self.min_confidence if min_confidence is None else min_confidence
+                if _minc and edge_rank(edge) < CONFIDENCE_RANK.get(_minc, 0):
                     continue
 
                 to_node = edge["to"]

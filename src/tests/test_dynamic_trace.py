@@ -61,6 +61,26 @@ FIXTURE = {
         def finish(engine):
             return "alpha:" + str(len(engine.hooks))
         """),
+    # a dispatch table: statically the call site links to all three; the test only fires `add`
+    "src/dyn/ops.py": textwrap.dedent("""\
+        def op_add(a, b):
+            return a + b
+
+
+        def op_sub(a, b):
+            return a - b
+
+
+        def op_mul(a, b):
+            return a * b
+
+
+        OPS = {"add": op_add, "sub": op_sub, "mul": op_mul}
+
+
+        def apply(name, a, b):
+            return OPS[name](a, b)
+        """),
     "tests/conftest.py": "import sys, os\nsys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))\n",
     "tests/test_engine.py": textwrap.dedent("""\
         from dyn.core import Engine
@@ -74,6 +94,11 @@ FIXTURE = {
             e = Engine()
             e.register(on_result)
             assert e.run("alpha") == "alpha:1"
+
+
+        def test_apply_add():
+            from dyn.ops import apply
+            assert apply("add", 2, 3) == 5
         """),
 }
 
@@ -105,7 +130,7 @@ def main():
         check("trace_pytest ran pytest and wrote trace.json", tpath.is_file(), (r.returncode, r.stderr[-400:]))
         trace = load_trace(str(tpath))
         check("trace records the test outcome and repo-relative files with hashes",
-              trace["tests"].get("passed") == 1 and "src/dyn/alpha.py" in trace["files"] and all(not f.startswith(("C:", "/")) for f in trace["files"]), trace.get("tests"))
+              trace["tests"].get("passed") == 2 and "src/dyn/alpha.py" in trace["files"] and all(not f.startswith(("C:", "/")) for f in trace["files"]), trace.get("tests"))
         e = [x for x in trace["edges"] if x["to"]["function"] == "handle_alpha"]
         check("trace has the edge Engine.run -> handle_alpha attributed to the test nodeid",
               e and e[0]["from"]["function"] == "run" and e[0]["from"]["class"] == "Engine" and e[0]["test"].endswith("::test_run_alpha"), e[:1])
@@ -129,6 +154,25 @@ def main():
         check("observed edges are not counted as low confidence", comp.get("low_confidence_edges", 0) == 0, comp)
         static_e = [x for x in g["execution_edges"] if x.get("source") != "trace"]
         check("no static edge was removed by the merge", len(static_e) >= 5, len(static_e))
+
+        # ---- trace-informed pruning of dispatch fan-out
+        ops = [x for x in g["execution_edges"] if x["from"]["file"] == "src/dyn/ops.py" and x["from"].get("function") == "apply"]
+        conf = {x["to"]["function"]: (x.get("confidence"), bool(x.get("observed"))) for x in ops}
+        check("dispatch fan-out: the candidate the trace fired is observed, the others demoted to 'unobserved' (static guess kept)",
+              conf.get("op_add", (None, False))[1] and conf.get("op_sub") == ("unobserved", False) and conf.get("op_mul") == ("unobserved", False)
+              and all(x.get("static_confidence") == "dispatch" for x in ops if x["to"]["function"] != "op_add"), conf)
+        check("merge summary counts the demotions", g["_trace"].get("fanout_edges_demoted") == 2, g["_trace"])
+        ia_sub = srv.mcp_impact_analysis(target="FUNCTION:src/dyn/ops.py:op_sub", direction="UPSTREAM", max_depth=2)
+        check("default query still lists apply() as a caller of op_sub, labelled unobserved",
+              any(n.get("function") == "apply" for n in ia_sub.get("upstream_nodes", [])) and (ia_sub.get("completeness") or {}).get("edges_by_confidence", {}).get("unobserved") == 1, ia_sub.get("completeness"))
+        ia_sub_r = srv.mcp_impact_analysis(target="FUNCTION:src/dyn/ops.py:op_sub", direction="UPSTREAM", max_depth=2, min_confidence="resolved")
+        check("min_confidence='resolved' drops the contradicted guess (no callers of op_sub)", not ia_sub_r.get("upstream_nodes"), ia_sub_r.get("upstream_nodes"))
+        ia_add_o = srv.mcp_impact_analysis(target="FUNCTION:src/dyn/ops.py:op_add", direction="UPSTREAM", max_depth=2, min_confidence="observed")
+        check("min_confidence='observed' keeps the confirmed caller of op_add", any(n.get("function") == "apply" for n in ia_add_o.get("upstream_nodes", [])), ia_add_o.get("upstream_nodes"))
+        check("edges_by_confidence is reported, highest confidence first",
+              list((ia_add_o.get("completeness") or {}).get("edges_by_confidence", {}).keys())[:1] == ["observed"], ia_add_o.get("completeness"))
+        bad = srv.mcp_impact_analysis(target="FUNCTION:src/dyn/ops.py:op_add", min_confidence="certain")
+        check("an unknown min_confidence is an error listing the levels", "error" in bad and "observed" in bad["error"], bad)
 
         # ---- staleness: edit a traced file, rebuild -> flagged
         p = root / "src/dyn/alpha.py"

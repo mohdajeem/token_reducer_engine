@@ -13,6 +13,7 @@ sys.path.insert(0, str(current_file.parent.parent))
 from mcp.server.fastmcp import FastMCP
 from build_graph import build_graph
 from impact_engine import GraphTraversal, TraversalPolicy, PolicyTraversalEngine
+from impact_engine.graph_traversal import CONFIDENCE_RANK, edge_confidence
 from context_engine import ContextExtractor
 from main import resolve_target_node, TargetSpecError
 import re
@@ -436,6 +437,7 @@ def mcp_impact_analysis(
     direction: str = "BOTH",
     include_types: Optional[List[str]] = None,
     include_tests: bool = False,
+    min_confidence: Optional[str] = None,
 ) -> dict:
     """
     Resolves the blast radius of a change using precision policies, depth limits, and edge filters.
@@ -447,13 +449,19 @@ def mcp_impact_analysis(
         direction: Traversal direction ('UPSTREAM', 'DOWNSTREAM', or 'BOTH').
         include_types: Optional list of edge types to include (e.g. ['FUNCTION_CALL', 'DB_ACCESS']).
         include_tests: Also follow edges that originate in test files (hidden by default).
+        min_confidence: Only follow edges at least this certain: 'observed' (seen in a dynamic
+            trace), 'resolved' (static resolution), 'dispatch' (static guesses too), or
+            None (everything, including guesses a trace contradicted, marked 'unobserved').
+            Ask for 'resolved' first and widen if the answer is empty.
     """
     with SERVER_STATE["lock"]:
         graph = SERVER_STATE.get("graph")
         if not graph:
             return {"error": "Graph is not built yet. Please call mcp_build_graph(repo_path) first."}
-            
+
         try:
+            if min_confidence and min_confidence not in CONFIDENCE_RANK:
+                return {"error": f"min_confidence must be one of {sorted(CONFIDENCE_RANK, key=CONFIDENCE_RANK.get, reverse=True)}"}
             try:
                 with redirect_stdout_to_stderr():
                     target_node = resolve_target_node(graph, target, repo_root=SERVER_STATE.get("repo_path"))
@@ -474,8 +482,9 @@ def mcp_impact_analysis(
                     direction=direction.upper(),
                     include_types=include_types,
                     include_tests=include_tests,
+                    min_confidence=min_confidence,
                 )
-            
+
             upstream = impact.get("upstream", [])
             downstream = impact.get("downstream", [])
             
@@ -484,6 +493,7 @@ def mcp_impact_analysis(
                 "policy_applied": policy_enum.name,
                 "max_depth_applied": max_depth,
                 "direction": direction,
+                "min_confidence_applied": min_confidence,
                 "upstream_edges_count": len(upstream),
                 "downstream_edges_count": len(downstream),
                 "upstream_nodes": [edge["from"] for edge in upstream],
@@ -750,7 +760,7 @@ def mcp_expand_signature(file_path: str, function_name: str) -> str:
 # COMPLETENESS -- every impact answer says how much of it is known
 # ==========================================================
 def _edge_confidence(edge):
-    return edge.get("confidence") or "resolved"
+    return edge_confidence(edge)
 
 
 def impact_completeness(graph, target_node, upstream, downstream, include_tests=False):
@@ -783,6 +793,9 @@ def impact_completeness(graph, target_node, upstream, downstream, include_tests=
                 unresolved.append(entry)
     low = [{"from": e.get("from"), "to": e.get("to"), "confidence": _edge_confidence(e)}
            for e in list(upstream) + list(downstream) if _edge_confidence(e) not in ("resolved", "observed")]
+    by_conf = {}
+    for e in list(upstream) + list(downstream):
+        by_conf[_edge_confidence(e)] = by_conf.get(_edge_confidence(e), 0) + 1
     traced = [e for e in list(upstream) + list(downstream) if e.get("source") == "trace" or e.get("observed")]
     out = {
         "verdict": "complete" if not unresolved else "partial",
@@ -791,6 +804,9 @@ def impact_completeness(graph, target_node, upstream, downstream, include_tests=
         "external_calls_to_name": len(external),
         "low_confidence_edges": len(low),
         "low_confidence_examples": low[:10],
+        # certain -> guessed -> contradicted: observed / resolved / dispatch, dynamic,
+        # name-unique, candidates / unobserved
+        "edges_by_confidence": dict(sorted(by_conf.items(), key=lambda kv: -CONFIDENCE_RANK.get(kv[0], 2))),
     }
     tinfo = graph.get("_trace")
     if tinfo:

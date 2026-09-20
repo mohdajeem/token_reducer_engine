@@ -31,11 +31,13 @@ class PolicyTraversalEngine:
         direction="BOTH",
         include_types=None,
         include_tests=False,
+        min_confidence=None,
     ) -> dict:
         """
         Runs the traversal engine and filters the upstream/downstream edges 
         according to the selected policy, depth limits, direction, and edge types.
         """
+        self.traversal_engine.min_confidence = min_confidence
         if not isinstance(policy, TraversalPolicy):
             try:
                 policy = TraversalPolicy(str(policy).upper())

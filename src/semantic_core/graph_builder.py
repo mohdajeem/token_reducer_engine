@@ -336,6 +336,7 @@ class GraphBuilder:
                 break
             self._n_ret_prev = n_ret
         self.link_nested_functions()
+        self.link_constant_uses()
 
         # ======================================================
         # DETECT TAINT SOURCES
@@ -1371,6 +1372,63 @@ class GraphBuilder:
                                      "candidates": [{"file": cf, "function": m["name"]} for cf, m in cands]})
         return n
 
+    def link_constant_uses(self):
+        """Edge function -> constant for every module-level constant a function body reads,
+        in its own file or imported by name (`from dj.global_settings import
+        FILE_UPLOAD_PERMISSIONS`). confidence="uses". A changed regex or setting then reaches
+        the tests through the functions that use it. One regex scan per file that can see
+        at least one constant; idempotent."""
+        consts = {}  # file -> {name}
+        for f, fns in self.graph["functions"].items():
+            for fn in fns:
+                if isinstance(fn, dict) and fn.get("kind") == "constant":
+                    consts.setdefault(f, set()).add(fn["name"])
+        if not consts:
+            return 0
+        visible = {}  # file -> {local name: (const file, const name)}
+        for f in self.graph["functions"]:
+            vis = {}
+            for n in consts.get(f, ()):
+                vis[n] = (f, n)
+            for imp in self.graph.get("imports", {}).get(f, []):
+                src, nm = imp.get("file"), imp.get("name")
+                if src and nm and nm in consts.get(src, ()):
+                    vis[imp.get("alias") or nm] = (src, nm)
+            if vis:
+                visible[f] = vis
+        have = set()
+        for e in self.graph.get("execution_edges", []):
+            if e.get("confidence") == "uses":
+                have.add((e["from"].get("file"), e["from"].get("function"), e["from"].get("class"), e["to"].get("file"), e["to"].get("function")))
+        root = getattr(self, "project_root", None) or ""
+        n = 0
+        for f, vis in visible.items():
+            fns = [fn for fn in self.graph["functions"].get(f, []) if isinstance(fn, dict) and fn.get("kind") not in ("constant", "class", "value") and fn.get("start_line")]
+            if not fns:
+                continue
+            try:
+                with open(os.path.join(root, f), "r", encoding="utf-8", errors="replace") as fh:
+                    lines = fh.read().split("\n")
+            except OSError:
+                continue
+            rx = re.compile(r"(?<![\w.])(" + "|".join(re.escape(k) for k in sorted(vis, key=len, reverse=True)) + r")(?![\w])")
+            for fn in fns:
+                body = "\n".join(lines[fn["start_line"]:fn.get("end_line") or fn["start_line"]])  # after the def line
+                for name in set(rx.findall(body)):
+                    cf, cn = vis[name]
+                    key = (f, fn["name"], fn.get("class"), cf, cn)
+                    if key in have:
+                        continue
+                    have.add(key)
+                    from_node = {"type": "FUNCTION", "file": f, "function": fn["name"]}
+                    if fn.get("class"):
+                        from_node["class"] = fn["class"]
+                    self.add_execution_edge(from_node=from_node, to_node={"type": "FUNCTION", "file": cf, "function": cn},
+                                            edge_type="FUNCTION_CALL", is_test=bool(fn.get("is_test")))
+                    self.graph["execution_edges"][-1]["confidence"] = "uses"
+                    n += 1
+        return n
+
     def link_nested_functions(self):
         """A function defined inside another (a callback passed to forEach, a jasmine
         matcher's `compare`, an event handler) runs when the enclosing code hands it over,
@@ -1971,15 +2029,19 @@ class GraphBuilder:
             for c in calls:
                 if not c.get("receiver") and c.get("function"):
                     called.add(c["function"])
-        if not called:
-            return
         for sm in semantic_matches:
-            if sm.match_type != "VARIABLE_ASSIGNMENT" or sm.owner_function:
+            if sm.match_type != "VARIABLE_ASSIGNMENT" or sm.owner_function or sm.get("assign.class"):
                 continue
             name = sm.get("assign.variable")
-            if not name or name not in called:
+            if not name or not re.match(r"^[A-Za-z_]\w*$", name):
                 continue
             if self.function_index.resolve_function(sm.file_path, name):
+                continue
+            # a called module-level value is a function (kind="value"); any other module-level
+            # assignment is a constant node (a regex, a setting, a table): a change to it has
+            # a blast radius too -- the functions that READ it (see link_constant_uses)
+            kind = "value" if name in called else "constant"
+            if kind == "constant" and (not sm.file_path.endswith(".py") or name.startswith("__")):
                 continue
             self.ensure_file("functions", sm.file_path)
             metadata = {
@@ -1987,7 +2049,7 @@ class GraphBuilder:
                 "file": sm.file_path,
                 "start_line": sm.start_point[0] + 1,
                 "end_line": sm.end_point[0] + 1,
-                "kind": "value",
+                "kind": kind,
             }
             if getattr(sm, "is_test", False):
                 metadata["is_test"] = True

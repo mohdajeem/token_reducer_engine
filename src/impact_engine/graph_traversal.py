@@ -6,7 +6,7 @@ from collections import deque
 # "unobserved": one of those guesses that the trace contradicted (the caller ran, and
 # called a sibling candidate instead).
 CONFIDENCE_RANK = {"observed": 4, "resolved": 3, "name-unique": 2, "candidates": 2, "dispatch": 2, "dynamic": 2,
-                   "convention": 2, "nested": 2, "unobserved": 1}
+                   "convention": 2, "nested": 2, "uses": 3, "unobserved": 1}
 
 
 def edge_confidence(edge):

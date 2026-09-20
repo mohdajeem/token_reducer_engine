@@ -394,6 +394,62 @@ pattern("doc-return-types", {
 ])
 
 
+# --------------------------------------------------------------------------- module-constants
+# django: the gold patch changes a module-level regex / setting, not a function
+# (utils/dateparse.py standard_duration_re, conf/global_settings.py FILE_UPLOAD_PERMISSIONS,
+# core/validators.py); the tests reach it through the functions that READ the constant
+pattern("module-constants", {
+    "pyproject.toml": "[project]\nname = 'pat'\n",
+    "src/dj/__init__.py": "",
+    "src/dj/dateparse.py": textwrap.dedent("""        import re
+
+        standard_duration_re = re.compile(r"^(?:(?P<days>-?\d+) (days?, )?)?")
+        iso8601_duration_re = re.compile(r"^P")
+
+
+        def parse_duration(value):
+            match = standard_duration_re.match(value) or iso8601_duration_re.match(value)
+            return match
+
+
+        def parse_date(value):
+            return value
+        """),
+    "src/dj/global_settings.py": textwrap.dedent("""        FILE_UPLOAD_PERMISSIONS = None
+        FILE_UPLOAD_DIRECTORY_PERMISSIONS = None
+        """),
+    "src/dj/storage.py": textwrap.dedent("""        from dj.global_settings import FILE_UPLOAD_PERMISSIONS
+
+
+        class FileSystemStorage:
+            def _save(self, name):
+                return self.file_permissions_mode()
+
+            def file_permissions_mode(self):
+                return FILE_UPLOAD_PERMISSIONS
+        """),
+    "tests/test_dateparse.py": textwrap.dedent("""        from dj.dateparse import parse_duration, parse_date
+
+
+        def test_negative():
+            assert parse_duration("-1 days") is None or True
+
+
+        def test_parse_date():
+            assert parse_date("x")
+        """),
+    "tests/test_storage.py": textwrap.dedent("""        from dj.storage import FileSystemStorage
+
+
+        def test_override_file_upload_permissions():
+            FileSystemStorage()._save("f")
+        """),
+}, [
+    ("FUNCTION:src/dj/dateparse.py:standard_duration_re", "test_negative", 4),
+    ("FUNCTION:src/dj/global_settings.py:FILE_UPLOAD_PERMISSIONS", "test_override_file_upload_permissions", 4),
+])
+
+
 # --------------------------------------------------------------------------- js-generated-titles
 # markedjs/marked test/specs/marked/marked-spec.js: tests are generated from a JSON spec in a
 # loop, titled with a template string; the failing id is "Marked Table cells should pass example 9"

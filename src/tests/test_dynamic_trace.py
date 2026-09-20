@@ -156,7 +156,8 @@ def main():
         check("no static edge was removed by the merge", len(static_e) >= 5, len(static_e))
 
         # ---- trace-informed pruning of dispatch fan-out
-        ops = [x for x in g["execution_edges"] if x["from"]["file"] == "src/dyn/ops.py" and x["from"].get("function") == "apply"]
+        ops = [x for x in g["execution_edges"] if x["from"]["file"] == "src/dyn/ops.py" and x["from"].get("function") == "apply"
+               and x["to"].get("function", "").startswith("op_")]  # (apply -> OPS is a 'uses' edge to the table itself)
         conf = {x["to"]["function"]: (x.get("confidence"), bool(x.get("observed"))) for x in ops}
         check("dispatch fan-out: the candidate the trace fired is observed, the others demoted to 'unobserved' (static guess kept)",
               conf.get("op_add", (None, False))[1] and conf.get("op_sub") == ("unobserved", False) and conf.get("op_mul") == ("unobserved", False)

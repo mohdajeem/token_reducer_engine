@@ -1149,7 +1149,19 @@ def mcp_tests_for(target: str, hops: int = 2, limit: int = 30) -> dict:
             if n.get("file") in test_files and (n.get("file"), n.get("function")) not in seen:
                 seen.add((n.get("file"), n.get("function")))
                 out.append({"file": n["file"], "function": n.get("function"), "depth": e.get("depth")})
-        return {"target": node, "tests": out[:limit]}
+        result = {"target": node, "tests": out[:limit], "level": "function"}
+        if not out and node.get("file"):
+            # no call chain reaches a test function (dynamic dispatch, fixtures the graph
+            # cannot type, ...): fall back to the test FILES that import the target's file,
+            # directly or through re-exporting packages. Labelled so consumers know it is
+            # coarser than a call chain.
+            deps = file_dependents(graph, node["file"], hops=2)
+            files = sorted((f for f in deps if f in test_files), key=lambda f: (deps[f], f))
+            result["level"] = "file"
+            result["test_files"] = [{"file": f, "depth": deps[f], "via": "import"} for f in files[:limit]]
+            result["note"] = ("No test function reaches this symbol through resolved call edges; "
+                              "test_files lists test files that import its module (file-level, coarser).")
+        return result
 
 
 if __name__ == "__main__":

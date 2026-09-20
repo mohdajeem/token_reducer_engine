@@ -488,6 +488,12 @@ def main():
         c = calls(g2, "tests/test_fixture.py").get(("gear", "spin"))
         check("a fixture defined as a method of the test class types the sibling test's parameter -> gear.spin() resolves to Gear.spin",
               c is not None and c.get("resolved_class") == "Gear", c)
+        # base_fn is called by nothing: no call chain reaches a test, but tests/test_engine.py
+        # imports pkg (whose __init__ re-exports from engine) -> file-level fallback
+        tf2 = srv.mcp_tests_for(target="FUNCTION:src/pkg/base.py:base_fn", hops=2)
+        check("mcp_tests_for on an uncalled symbol reports level='file' with a labelled note", tf2.get("level") == "file" and not tf2.get("tests") and "file-level" in tf2.get("note", ""), tf2)
+        tf3 = srv.mcp_tests_for(target=f"FUNCTION:{E}:Engine.tick", hops=2)
+        check("mcp_tests_for on a reached symbol stays level='function'", tf3.get("level") == "function" and tf3.get("tests"), tf3)
     finally:
         os.environ.pop("SEMANTIC_INDEX_TESTS", None)
 

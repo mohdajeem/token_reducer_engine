@@ -610,8 +610,8 @@ class GraphBuilder:
             src_file = self.symbol_table.register_star_import(sm.file_path, sm.get("import.source"))
             self.graph["imports"][sm.file_path].append({"source": sm.get("import.source"), "name": "*", "alias": None,
                                                         "file": src_file})
-            if src_file and sm.file_path.endswith("__init__.py"):
-                # a package that star-imports a module re-exports everything it defines
+            if src_file and sm.file_path.endswith(".py"):
+                # a module that star-imports another re-exports everything it defines
                 entry = self.graph["reexports"].setdefault(sm.file_path, {"star": [], "names": {}})
                 if src_file not in entry["star"]:
                     entry["star"].append(src_file)
@@ -651,9 +651,12 @@ class GraphBuilder:
             "file": resolved_file if isinstance(resolved_file, str) else None,
         })
 
-        # A Python package `__init__.py` that imports a name re-exports it:
-        # `from .core.engine import boot` makes `from pkg import boot` reach engine.py.
-        if sm.file_path.endswith("__init__.py") and resolved_file and sm.get("import.name"):
+        # A Python module that imports a name re-exports it (importing binds the name in the
+        # module's namespace): `from .core.engine import boot` in pkg/__init__.py makes
+        # `from pkg import boot` reach engine.py, and `from .exceptions import
+        # TemplateSyntaxError` in template/base.py makes `from .base import
+        # TemplateSyntaxError` reach exceptions.py (400 django call sites hit this).
+        if sm.file_path.endswith(".py") and resolved_file and sm.get("import.name"):
             entry = self.graph["reexports"].setdefault(sm.file_path, {"star": [], "names": {}})
             local = sm.get("import.alias") or sm.get("import.name")
             entry["names"][local] = [resolved_file, sm.get("import.name")]
@@ -809,6 +812,28 @@ class GraphBuilder:
     # unique-name fallback at 27% on requests, almost entirely `kwargs.pop`, `x.setdefault`,
     # `f.read`, `log.info` resolving to a vendored OrderedDict / HTTPResponse / cookie jar.
     _BUILTIN_METHOD_NAMES = None
+
+    _BUILTIN_FUNCTION_NAMES = None
+
+    @classmethod
+    def builtin_function_names(cls):
+        """Bare names the language provides: Python builtins (len, isinstance, ValueError,
+        super, ...) and the JS/browser/Node globals. A call to one of these is never a
+        project function; labelling it keeps it out of "unresolved" counts and out of the
+        completeness block of a project function that happens to share the name (open)."""
+        if cls._BUILTIN_FUNCTION_NAMES is None:
+            import builtins
+            names = {n for n in dir(builtins) if not n.startswith("_")}
+            names |= {"require", "parseInt", "parseFloat", "isNaN", "isFinite", "setTimeout", "setInterval",
+                      "clearTimeout", "clearInterval", "setImmediate", "queueMicrotask", "fetch", "alert",
+                      "encodeURIComponent", "decodeURIComponent", "encodeURI", "decodeURI", "escape", "unescape",
+                      "Symbol", "Promise", "Array", "Object", "String", "Number", "Boolean", "Date", "RegExp", "Error",
+                      "TypeError", "RangeError", "Map", "Set", "WeakMap", "WeakSet", "Proxy", "Reflect", "BigInt",
+                      "structuredClone", "Function", "Uint8Array", "Float32Array", "Float64Array", "ArrayBuffer",
+                      "describe", "it", "test", "expect", "beforeEach", "afterEach", "beforeAll", "afterAll",
+                      "suite", "context", "specify", "jest", "vi"}
+            cls._BUILTIN_FUNCTION_NAMES = frozenset(names)
+        return cls._BUILTIN_FUNCTION_NAMES
 
     @classmethod
     def builtin_method_names(cls):
@@ -1143,6 +1168,14 @@ class GraphBuilder:
                     continue
                 recv = call.get("receiver")
                 func = call.get("function")
+                if not recv and func and not call.get("dispatch"):
+                    # bare call that nothing defined: a language builtin, or a name imported
+                    # from a package outside the project -> say so instead of leaving None
+                    if func in self.builtin_function_names():
+                        call["external"] = "builtin"
+                    elif func in external:
+                        call["external"] = external[func]
+                    continue
                 if not recv or not func or recv in ("this", "super", "self"):
                     continue
                 root = recv.split(".")[0].split("[")[0].split("(")[0]

@@ -242,6 +242,20 @@ FIXTURE = {
             def dynamic_f(self, node):
                 return getattr(self, f"visit_{node.kind}")(node)
         """),
+    # a plain module re-exports what it imports (django/template/base.py re-exports
+    # TemplateSyntaxError from .exceptions); builtins and package names are labelled
+    "src/pkg/errors.py": "class PkgError(Exception):\n    pass\n",
+    "src/pkg/base.py": "from .errors import PkgError\n\n\ndef base_fn():\n    return 1\n",
+    "src/pkg/raise_it.py": textwrap.dedent("""\
+        from .base import PkgError
+        from numpy import polyval
+
+
+        def check(items):
+            if len(items) > 2:
+                raise PkgError()
+            return polyval(items, 1)
+        """),
     "tests/test_engine.py": textwrap.dedent("""\
         from pkg import boot
 
@@ -433,6 +447,16 @@ def main():
     ia = srv.mcp_impact_analysis(target=f"FUNCTION:{D}:Visitor.visit_name", direction="UPSTREAM", max_depth=1)
     check("impact of visit_name lists dispatch/dynamic callers with low confidence noted",
           {n.get("function") for n in ia.get("upstream_nodes", [])} >= {"dispatch", "dynamic", "dynamic_f"} and (ia.get("completeness") or {}).get("low_confidence_edges", 0) >= 3, ia)
+
+    # ---------- 3g. re-exports through plain modules; builtin / package bare calls labelled
+    rc = calls(graph, "src/pkg/raise_it.py")
+    c = rc.get((None, "PkgError"))
+    check("`from .base import PkgError` where base.py merely imports it from .errors -> class node in errors.py",
+          c is not None and c.get("resolved_file") == "src/pkg/errors.py" and (c.get("resolved_function") or {}).get("kind") == "class", c)
+    c = rc.get((None, "len"))
+    check("len(...) is labelled external='builtin', not left unresolved", c is not None and c.get("external") == "builtin", c)
+    c = rc.get((None, "polyval"))
+    check("polyval(...) imported from numpy is labelled external='numpy'", c is not None and c.get("external") == "numpy", c)
 
     # ---------- 4. external
     c = ac.get(("json", "dumps"))

@@ -887,9 +887,26 @@ class GraphBuilder:
                 if isinstance(fn, dict) and fn.get("parent"):
                     nested[(f, fn["name"])] = fn["parent"]
         ret = {}
+        # declared / documented return types win over inference (`-> Axes`, numpydoc Returns)
+        declared = {}
+        for f, fns in self.graph["functions"].items():
+            for fn in fns:
+                if isinstance(fn, dict) and fn.get("return_type") and self.resolve_class_file(f, fn["return_type"]):
+                    declared.setdefault((f, fn["name"]), set()).add(fn["return_type"])
+        for k, v in declared.items():
+            if len(v) == 1:
+                ret[k] = set(v)
+        tuples = {}  # (file, fn) -> [type or None per position] for `return fig, ax`
         for r in self.graph.get("returns", []):
             f, fn, val = r.get("file"), r.get("function"), (r.get("value") or "").strip()
             if not fn or not val:
+                continue
+            if (f, fn) in declared:
+                continue
+            if "," in val and "(" not in val and "[" not in val and "{" not in val:
+                parts = [p.strip() for p in val.split(",")]
+                if all(_re.match(r"^[A-Za-z_]\w*$", p) for p in parts):
+                    tuples[(f, fn)] = [self.symbol_table.resolve_type(f, fn, p) for p in parts]
                 continue
             t = SymbolResolver.extract_instantiated_class(val)
             cs = owner_class.get((f, fn)) or set()
@@ -910,11 +927,18 @@ class GraphBuilder:
                     # `return self._chain()`: the sibling method's return type (previous round)
                     prev = getattr(self, "_return_types", None) or {}
                     t = prev.get((f, m.group(1)))
+            if not t and ("(" in val or "." in val):
+                # `return figure().add_subplot()` / `return fig.legend()`: chain typing from the
+                # previous round's return types
+                t = self._expr_type(f, fn, val)
+                if t and t.startswith(("callable:", "class:")):
+                    t = None
             if t:
                 ret.setdefault((f, fn), set()).add(t)
         ret = {k: next(iter(v)) for k, v in ret.items() if len(v) == 1}
         self._return_types = ret
-        if not ret:
+        self._return_tuples = tuples
+        if not ret and not tuples:
             return 0
         call_target, class_target = {}, {}
         for f, calls in self.graph["calls"].items():
@@ -929,6 +953,17 @@ class GraphBuilder:
         for vs in self.graph.get("variable_states", []):
             var, val, f, fn = vs.get("variable"), vs.get("value") or "", vs.get("file"), vs.get("function") or "GLOBAL_SCOPE"
             scope = "GLOBAL" if fn == "GLOBAL_SCOPE" else fn
+            if var and "," in var:
+                # `fig, ax = plt.subplots()`: positional types from the callee's `return fig, axs`
+                targets = [t.strip() for t in var.split(",")]
+                target_fn = self._callee_of_expr(f, fn, val.strip())
+                types = self._return_tuples.get(target_fn) if target_fn else None
+                if types:
+                    for name, t in zip(targets, types):
+                        if t and name and not self.symbol_table.resolve_type(f, scope, name):
+                            self.symbol_table.register_type(f, scope, name, t)
+                            n += 1
+                continue
             if not var or self.symbol_table.resolve_type(f, scope, var):
                 continue
             m = _re.match(r"^(?:await\s+)?(?:[\w$]+\.)*([\w$]+)\s*\(", val)
@@ -954,10 +989,120 @@ class GraphBuilder:
                 t = ret.get(call_target.get((f, fn, callee), (None, None)))
             if not t:
                 t = class_target.get((f, fn, callee))  # `v = self.cls()` resolved to a class node
-            if t:
+            if not t:
+                t = self._expr_type(f, scope, val)  # chains: figure().add_subplot(), fig.legend()
+            if t and not t.startswith(("callable:", "class:")):
                 self.symbol_table.register_type(f, scope, var, t)
                 n += 1
         return n
+
+    def _callee_of_expr(self, file_path, caller, expr):
+        """(file, function name) of the function a call expression invokes, or None."""
+        head, name, _args = self._split_call(expr)
+        if name is None:
+            return None
+        if head is None:
+            for c in self.graph["calls"].get(file_path, []):
+                if c.get("function") == name and (c.get("caller_function") or "GLOBAL_SCOPE") == caller and c.get("resolved_function") \
+                        and not c.get("receiver"):
+                    return (c.get("resolved_file"), c["resolved_function"].get("name"))
+            return None
+        recv_t = self._expr_type(file_path, "GLOBAL" if caller == "GLOBAL_SCOPE" else caller, head)
+        if recv_t and not recv_t.startswith(("callable:", "class:")):
+            cf, cm = self.resolve_method(file_path, recv_t, name)
+            if cm:
+                return (cf, cm["name"])
+        # module alias: plt.subplots()
+        imp = self.symbol_table.resolve_import(file_path, head)
+        if imp:
+            f2, m2, _ = self.resolve_through_reexports(imp, name)
+            if m2:
+                return (f2, m2["name"])
+        return None
+
+    @staticmethod
+    def _split_call(expr):
+        """'a.b(c).d(e)' -> ('a.b(c)', 'd', 'e'); 'f(x)' -> (None, 'f', 'x'); else (None, None, None)."""
+        expr = expr.strip()
+        if expr.startswith("await "):
+            expr = expr[6:].strip()
+        if not expr.endswith(")"):
+            return None, None, None
+        depth, i = 0, len(expr) - 1
+        while i >= 0:
+            ch = expr[i]
+            if ch == ")":
+                depth += 1
+            elif ch == "(":
+                depth -= 1
+                if depth == 0:
+                    break
+            i -= 1
+        if i <= 0:
+            return None, None, None
+        args = expr[i + 1:-1]
+        callee = expr[:i]
+        j = len(callee) - 1
+        while j >= 0 and (callee[j].isalnum() or callee[j] in "_$"):
+            j -= 1
+        name = callee[j + 1:]
+        if not name:
+            return None, None, None
+        head = callee[:j].strip() if j >= 0 and callee[j] == "." else (None if j < 0 else callee[:j + 1].strip() or None)
+        if head is not None and head.startswith("new ") is False and j >= 0 and callee[j] != ".":
+            return None, None, None
+        return head, name, args
+
+    def _expr_type(self, file_path, scope, expr, _depth=0):
+        """Best-effort type of a Python/JS expression used as a receiver or value:
+        name / self.field / X(...) / f(...) / a.b(...).c(...) chains."""
+        if not expr or _depth > 6:
+            return None
+        import re as _re
+        from semantic_core.symbol_resolver import SymbolResolver
+        expr = expr.strip()
+        if expr.startswith("await "):
+            expr = expr[6:].strip()
+        if expr.startswith("(") and expr.endswith(")"):
+            expr = expr[1:-1].strip()
+        if _re.match(r"^[A-Za-z_$][\w$]*$", expr):
+            t = self.symbol_table.resolve_type(file_path, scope, expr)
+            return t
+        m = _re.match(r"^(?:self|this)\.([A-Za-z_]\w*)$", expr)
+        if m:
+            cls = None
+            for f, fns in self.graph["functions"].items():
+                if f == file_path:
+                    for fn in fns:
+                        if isinstance(fn, dict) and fn["name"] == scope and fn.get("class"):
+                            cls = fn["class"]
+                            break
+            return self.resolve_field_type(file_path, cls, m.group(1)) if cls else None
+        head, name, _args = self._split_call(expr)
+        if name is not None:
+            inst = SymbolResolver.extract_instantiated_class(expr if head is None else f"{name}()")
+            if head is None and inst and self.resolve_class_file(file_path, inst):
+                return inst
+            if head is not None and name[:1].isupper() and self.resolve_class_file(file_path, name):
+                return name  # mod.Class(...)
+            callee = self._callee_of_expr(file_path, "GLOBAL_SCOPE" if scope == "GLOBAL" else scope, expr)
+            ret = getattr(self, "_return_types", None) or {}
+            if callee:
+                t = ret.get(callee)
+                if t:
+                    return t
+            if head is None:
+                ct = self.symbol_table.resolve_type(file_path, scope, name)
+                if ct and ct.startswith("callable:"):
+                    _, cf, names = ct.split(":", 2)
+                    ts = {ret.get((cf, x)) for x in names.split("|")} - {None}
+                    return next(iter(ts)) if len(ts) == 1 else None
+            return None
+        m = _re.match(r"^(.+)\.([A-Za-z_]\w*)$", expr)
+        if m:
+            t = self._expr_type(file_path, scope, m.group(1), _depth + 1)
+            return self.resolve_field_type(file_path, t, m.group(2)) if t else None
+        return None
 
     def infer_fixture_param_types(self):
         """pytest injects fixtures by parameter NAME: `def test_x(app):` gets whatever the
@@ -1367,27 +1512,9 @@ class GraphBuilder:
         return False
 
     def _return_type_of_call(self, file_path, caller, recv_expr):
-        """Type of the value a call expression evaluates to: the class it instantiates, or
-        the return type of the function it resolves to (same file + caller, matched by
-        callee name), if known."""
-        import re as _re
-        from semantic_core.symbol_resolver import SymbolResolver
-        expr = recv_expr.strip()
-        inst = SymbolResolver.extract_instantiated_class(expr)
-        if inst and self.resolve_class_file(file_path, inst):
-            return inst
-        m = _re.match(r"^(?:await\s+)?(?:[\w$]+\.)*([\w$]+)\s*\(", expr)
-        if not m:
-            return None
-        name = m.group(1)
-        ret = getattr(self, "_return_types", None) or {}
-        scope_caller = caller if caller != "GLOBAL" else None
-        for c in self.graph["calls"].get(file_path, []):
-            if c.get("function") == name and (c.get("caller_function") or None) == scope_caller and c.get("resolved_function"):
-                t = ret.get((c.get("resolved_file"), c["resolved_function"].get("name")))
-                if t:
-                    return t
-        return None
+        """Type of the value a call expression evaluates to (see _expr_type)."""
+        t = self._expr_type(file_path, caller, recv_expr)
+        return None if (t and t.startswith(("callable:", "class:"))) else t
 
     def resolve_pending_calls(self):
         """Final pass over calls that stayed unresolved: receiver types learned late (argument
@@ -1904,6 +2031,8 @@ class GraphBuilder:
             metadata["fixture"] = sm.get("function.fixture")  # True, or the injected name
         if sm.get("function.parent"):
             metadata["parent"] = sm.get("function.parent")  # enclosing def of a nested def
+        if sm.get("function.return_type"):
+            metadata["return_type"] = sm.get("function.return_type")  # annotation or docstring
         if getattr(sm, "is_test", False):
             metadata["is_test"] = True
 

@@ -140,6 +140,11 @@
   left: (identifier) @assign.variable
   right: (_) @assign.value)
 
+; `fig, ax = plt.subplots()`: tuple targets, typed positionally from the callee's `return fig, axs`
+(assignment
+  left: [(pattern_list) (tuple_pattern)] @assign.variable
+  right: (_) @assign.value)
+
 ; `self.handlers = {...}` / `self.engine = Engine()`: field assignments are variable states
 ; too (dispatch tables live on instances; `self.x.m()` can be typed from them)
 (assignment

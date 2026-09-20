@@ -267,6 +267,133 @@ pattern("dunder-call", {
 ])
 
 
+# --------------------------------------------------------------------------- doc-return-types
+# matplotlib: `fig, ax = plt.subplots()` (tuple unpacking), pyplot wrappers `return gca().hist()`
+# (a call-expression receiver), and types that exist only in numpydoc "Returns" sections
+pattern("doc-return-types", {
+    "pyproject.toml": "[project]\nname = 'pat'\n",
+    "src/mpl/__init__.py": "",
+    "src/mpl/axes.py": textwrap.dedent("""        class Axes:
+            def plot(self, *args):
+                return self._plot(args)
+
+            def _plot(self, args):
+                return args
+
+            def hist(self, x):
+                return self._hist(x)
+
+            def _hist(self, x):
+                return x
+
+            def get_xlim(self) -> tuple:
+                return (0, 1)
+
+
+        class Axes3D:
+            # same method names as Axes: nothing here may resolve by unique name
+            def plot(self, *args):
+                return self._plot3d(args)
+
+            def _plot3d(self, args):
+                return args
+
+            def hist(self, x):
+                return x
+
+            def set_draggable(self, state):
+                return state
+        """),
+    "src/mpl/figure.py": textwrap.dedent("""        from .axes import Axes
+
+
+        class Figure:
+            def add_subplot(self, *args):
+                \"\"\"Add an Axes to the figure.
+
+                Returns
+                -------
+                `~.axes.Axes`
+                    The new Axes.
+                \"\"\"
+                return self._make(args)
+
+            def _make(self, args):
+                return args
+
+            def subplots(self, nrows=1):
+                \"\"\"Create subplots.
+
+                Returns
+                -------
+                ax : `~.axes.Axes` or array of Axes
+                \"\"\"
+                return self.add_subplot()
+
+            def legend(self, *args) -> "Legend":
+                return Legend(self)
+
+
+        class Legend:
+            def __init__(self, parent):
+                self.parent = parent
+
+            def set_draggable(self, state):
+                return self._draggable(state)
+
+            def _draggable(self, state):
+                return state
+        """),
+    "src/mpl/pyplot.py": textwrap.dedent("""        from .figure import Figure
+
+
+        def figure():
+            return Figure()
+
+
+        def gca():
+            return figure().add_subplot()
+
+
+        def subplots(nrows=1):
+            fig = figure()
+            axs = fig.subplots(nrows)
+            return fig, axs
+
+
+        def hist(x):
+            return gca().hist(x)
+
+
+        def close(fig):
+            return None
+        """),
+    "tests/test_axes.py": textwrap.dedent("""        from mpl import pyplot as plt
+
+
+        def test_inverted_limits():
+            fig, ax = plt.subplots()
+            ax.plot([1, 2])
+            ax.get_xlim()
+            plt.close(fig)
+
+
+        def test_hist_range_and_density():
+            plt.hist([1, 2, 3])
+
+
+        def test_subfigure_legend():
+            fig = plt.figure()
+            leg = fig.legend()
+            leg.set_draggable(True)
+        """),
+}, [
+    ("FUNCTION:src/mpl/axes.py:Axes._plot", "test_inverted_limits", 4),
+    ("FUNCTION:src/mpl/axes.py:Axes._hist", "test_hist_range_and_density", 4),
+    ("FUNCTION:src/mpl/figure.py:Legend._draggable", "test_subfigure_legend", 4),
+])
+
+
 # --------------------------------------------------------------------------- js-generated-titles
 # markedjs/marked test/specs/marked/marked-spec.js: tests are generated from a JSON spec in a
 # loop, titled with a template string; the failing id is "Marked Table cells should pass example 9"

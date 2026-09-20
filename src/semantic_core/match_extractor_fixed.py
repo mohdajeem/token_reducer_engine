@@ -1,3 +1,4 @@
+import re as _re
 #!/usr/bin/env python3
 """
 SEMANTIC MATCH EXTRACTOR - FIXED VERSION
@@ -161,6 +162,52 @@ def _title_text(node):
     return "${" + _text(node)[:40] + "}"
 
 
+_DOC_RETURNS_NUMPY = _re.compile(r"^\s*Returns?\s*\n\s*-{3,}\s*\n(.*?)(?:\n\s*\n|\Z)", _re.S | _re.M)
+_DOC_RETURNS_SPHINX = _re.compile(r":(?:rtype|returns?)\s*:\s*([^\n]+)")
+_DOC_RETURNS_GOOGLE = _re.compile(r"^\s*Returns?\s*:\s*\n\s*([^\n]+)", _re.M)
+_TYPE_TOKEN = _re.compile(r"(?<![\w.])(?:~?[\w.]*\.)?(_*[A-Z]\w*)")
+
+
+def _return_type_from_doc(doc):
+    """The class a docstring says the function returns.
+      numpydoc:  Returns\n-------\nax : `~.axes.Axes`      -> Axes
+      sphinx:    :rtype: Figure  /  :returns: A `Legend` -> Figure / Legend
+      google:    Returns:\n    Axes: the axes          -> Axes
+    None when the section names no class-like token (or several -- ambiguous)."""
+    if not doc:
+        return None
+    m = _DOC_RETURNS_NUMPY.search(doc) or _DOC_RETURNS_GOOGLE.search(doc) or _DOC_RETURNS_SPHINX.search(doc)
+    if not m:
+        return None
+    first = m.group(1).strip().splitlines()[0]
+    if ":" in first and "`" not in first.split(":")[0]:
+        first = first.split(":", 1)[1]  # "ax : `~.axes.Axes`" -> the type part
+    toks = _TYPE_TOKEN.findall(first)
+    toks = [t for t in toks if t not in ("None", "True", "False", "Optional", "Union", "List", "Tuple", "Dict", "Sequence", "Iterable", "Iterator", "Any", "Callable", "Type")]
+    return toks[0] if len(set(toks)) == 1 else None
+
+
+def _python_docstring(fnode):
+    body = fnode.child_by_field_name("body")
+    if body is None or not body.named_children:
+        return None
+    first = body.named_children[0]
+    if first.type == "expression_statement" and first.named_children and first.named_children[0].type == "string":
+        return _text(first.named_children[0])
+    return None
+
+
+def _declared_return_type(fnode):
+    """`-> Axes` / `-> "Legend"` / `-> Optional[Axes]` on a Python def; TS `): Axes {`."""
+    rt = fnode.child_by_field_name("return_type")
+    if rt is None:
+        return None
+    txt = _text(rt).strip().strip("'\"")
+    toks = _TYPE_TOKEN.findall(txt)
+    toks = [t for t in toks if t not in ("None", "Optional", "Union", "List", "Tuple", "Dict", "Sequence", "Iterable", "Iterator", "Any", "Callable", "Type", "Promise", "Array")]
+    return toks[0] if len(set(toks)) == 1 else None
+
+
 def _define_property_member(func_node):
     """`Object.defineProperties(X, { name: { value: fn } })` and
     `Object.defineProperty(X, 'name', { value: fn })` attach `name` to X (static when X is
@@ -205,7 +252,6 @@ def _define_property_member(func_node):
     return None
 
 
-import re as _re
 
 _JSDOC_PARAM_RE = _re.compile(r"@param\s*\{\s*([?!]?)([A-Za-z_$][\w$.]*)(?:<[^}]*>)?(\[\])?\s*[=]?\s*\}\s*\[?([A-Za-z_$][\w$]*)")
 _STATEMENT_WRAPPERS = {"export_statement", "lexical_declaration", "variable_declaration", "expression_statement",
@@ -704,6 +750,17 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                         fx = _is_pytest_fixture(fnode)
                         if fx:
                             capture_dict["function.fixture"] = fx  # True, or the name= override
+                        rt = None
+                        try:
+                            rt = _declared_return_type(fnode)
+                            if not rt and fnode.type == "function_definition":
+                                rt = _return_type_from_doc(_python_docstring(fnode))
+                            if not rt and fnode.type != "function_definition":
+                                rt = _return_type_from_doc(_doc_comment_before(fnode))
+                        except Exception:
+                            rt = None
+                        if rt:
+                            capture_dict["function.return_type"] = rt
                     if fnode is not None:
                         # receiver types: JSDoc `@param {Engine} e`, TS `(e: Engine)`, and
                         # `this.field = new X()` / `this.field = typedParam` in the body

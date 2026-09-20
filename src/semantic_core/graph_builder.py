@@ -325,6 +325,7 @@ class GraphBuilder:
             self.infer_parameter_types_from_flow()
             self.infer_types_from_returns()
             self.infer_fixture_param_types()
+            self.infer_class_attribute_injection()
             self.resolve_pending_calls()
             self.resolve_dispatch_calls()
             after = sum(1 for calls in self.graph["calls"].values() for c in calls if c.get("resolved_function"))
@@ -357,11 +358,7 @@ class GraphBuilder:
 
         self.detect_sanitizers()
 
-        # ======================================================
-        # TRACK VARIABLE STATES
-        # ======================================================
-
-        self.track_variable_states()
+        # (variable states were tracked before the inference fixpoint above)
         # ======================================================
         # DETECT VULNERABILITIES
         # ======================================================
@@ -880,10 +877,13 @@ class GraphBuilder:
         import re as _re
         from semantic_core.symbol_resolver import SymbolResolver
         owner_class = {}
+        nested = {}  # (file, inner name) -> enclosing def
         for f, fns in self.graph["functions"].items():
             for fn in fns:
                 if isinstance(fn, dict) and fn.get("class"):
                     owner_class.setdefault((f, fn["name"]), set()).add(fn["class"])
+                if isinstance(fn, dict) and fn.get("parent"):
+                    nested[(f, fn["name"])] = fn["parent"]
         ret = {}
         for r in self.graph.get("returns", []):
             f, fn, val = r.get("file"), r.get("function"), (r.get("value") or "").strip()
@@ -898,6 +898,10 @@ class GraphBuilder:
                 t = own
             if not t and _re.match(r"^[A-Za-z_$][\w$]*$", val):
                 t = self.symbol_table.resolve_type(f, fn, val)
+                if not t and (f, val) in nested and nested[(f, val)] == fn:
+                    # `return make` where make is a def nested in this function: the caller
+                    # gets a callable; what IT returns is looked up when it is called
+                    t = f"callable:{f}:{val}"
             if not t:
                 m = _re.match(r"^(?:self|this)\.([A-Za-z_$][\w$]*)\s*\(", val)
                 if m and own:
@@ -926,7 +930,17 @@ class GraphBuilder:
             m = _re.match(r"^(?:await\s+)?(?:[\w$]+\.)*([\w$]+)\s*\(", val)
             if not m:
                 continue
-            t = ret.get(call_target.get((f, fn, m.group(1)), (None, None)))
+            callee = m.group(1)
+            t = None
+            if "." not in val.split("(")[0]:
+                # `app_ = make_app(...)` where make_app is a variable / parameter typed as a
+                # callable (a factory fixture): the value is what the inner function returns
+                ct = self.symbol_table.resolve_type(f, scope, callee)
+                if ct and ct.startswith("callable:"):
+                    _, cf, cfn = ct.split(":", 2)
+                    t = ret.get((cf, cfn))
+            if not t:
+                t = ret.get(call_target.get((f, fn, callee), (None, None)))
             if t:
                 self.symbol_table.register_type(f, scope, var, t)
                 n += 1
@@ -1115,6 +1129,98 @@ class GraphBuilder:
             cache = self._qs_cache = "QuerySet" if len(owners) == 1 else None
         return cache
 
+    def infer_class_attribute_injection(self):
+        """pylint's test pattern: a base class does `self.checker = self.CHECKER_CLASS(...)`
+        and each subclass sets `CHECKER_CLASS = VariablesChecker`. For every class C with
+        such an attribute, the field assigned from `self.ATTR(...)` anywhere up C's
+        superclass chain gets C's value of ATTR as its type. Also links the base class's
+        `self.ATTR(...)` call site to every subclass value's constructor (candidates)."""
+        import re as _re
+        classes = self.graph.get("classes") or {}
+        # (file, class) -> {field: attr} from `self.field = self.ATTR(...)` in its methods
+        inject = {}
+        pat = _re.compile(r"^\s*(?:self|this)\.([A-Za-z_]\w*)\s*\(")
+        for vs in self.graph.get("variable_states", []):
+            var, cls = vs.get("variable") or "", vs.get("class")
+            if not cls or not var.startswith(("self.", "this.")):
+                continue
+            m = pat.match(vs.get("value") or "")
+            if m:
+                inject.setdefault((vs["file"], cls), {})[var.split(".", 1)[1]] = m.group(1)
+        if not inject:
+            return 0
+
+        def chain(file, cls, depth=0):
+            out = [(file, cls)]
+            entry = (classes.get(file) or {}).get(cls) or {}
+            sup = entry.get("superclass")
+            if sup and depth < 8:
+                sf = self.resolve_class_file(file, sup) or file
+                out += chain(sf, sup, depth + 1)
+            return out
+
+        n = 0
+        for f, cs in classes.items():
+            for cname, entry in cs.items():
+                attrs = entry.get("attrs") or {}
+                if not attrs:
+                    continue
+                for bf, bc in chain(f, cname):
+                    for field, attr in inject.get((bf, bc), {}).items():
+                        val = attrs.get(attr)
+                        if not val or not _re.match(r"^[A-Za-z_][\w.]*$", val) or val == "None":
+                            continue
+                        tname = val.split(".")[-1]
+                        if not self.resolve_class_file(f, tname):
+                            continue
+                        fields = entry.setdefault("fields", {})
+                        if fields.get(field) != tname:
+                            fields[field] = tname
+                            n += 1
+        # the base-class call site `self.ATTR(...)`: every subclass value is a possible callee
+        if n or inject:
+            sub_values = {}  # (attr) -> {(file, class name of value)}
+            for f, cs in classes.items():
+                for cname, entry in cs.items():
+                    for attr, val in (entry.get("attrs") or {}).items():
+                        if val and _re.match(r"^[A-Za-z_][\w.]*$", val) and val != "None":
+                            tname = val.split(".")[-1]
+                            cf = self.resolve_class_file(f, tname)
+                            if cf:
+                                sub_values.setdefault(attr, set()).add((cf, tname))
+            for file_path, calls in self.graph["calls"].items():
+                for call in calls:
+                    if call.get("resolved_function") or call.get("receiver") not in ("self", "this"):
+                        continue
+                    targets = sub_values.get(call.get("function"))
+                    if not targets:
+                        continue
+                    from_node = {"type": "FUNCTION", "file": file_path, "function": call.get("caller_function") or "GLOBAL_SCOPE"}
+                    if call.get("caller_class"):
+                        from_node["class"] = call["caller_class"]
+                    cands = []
+                    for cf, tname in sorted(targets):
+                        meta = self.function_index.resolve_function(cf, tname)
+                        if not meta:
+                            continue
+                        cands.append((cf, meta))
+                        self.add_execution_edge(from_node=dict(from_node), to_node={"type": "FUNCTION", "file": cf, "function": tname},
+                                                edge_type="FUNCTION_CALL", is_test=bool(call.get("is_test")), call_id=call.get("call_id"))
+                        self.graph["execution_edges"][-1]["confidence"] = "candidates"
+                        self._constructor_edge(from_node, cf, meta, bool(call.get("is_test")), call.get("call_id"))
+                    if cands:
+                        call.update({"resolved_file": cands[0][0], "resolved_function": cands[0][1], "resolution": "candidates",
+                                     "candidates": [{"file": cf, "function": m["name"]} for cf, m in cands]})
+        return n
+
+    def _is_parameter(self, file_path, function_name, name):
+        if not function_name or not name:
+            return False
+        for entry in self.graph.get("parameters", {}).get(file_path, []):
+            if entry.get("function") == function_name:
+                return name in (entry.get("params") or [])
+        return False
+
     def _return_type_of_call(self, file_path, caller, recv_expr):
         """Type of the value a call expression evaluates to: the class it instantiates, or
         the return type of the function it resolves to (same file + caller, matched by
@@ -1169,6 +1275,23 @@ class GraphBuilder:
                 recv = call.get("receiver")
                 func = call.get("function")
                 if not recv and func and not call.get("dispatch"):
+                    caller0 = call.get("caller_function") or "GLOBAL"
+                    ct = self.symbol_table.resolve_type(file_path, caller0, func)
+                    if ct and ct.startswith("callable:"):
+                        # `make_app(...)` where make_app is a parameter / variable holding a
+                        # factory's inner function: that function is the callee
+                        _, cf, cfn = ct.split(":", 2)
+                        cm = self.function_index.resolve_function(cf, cfn)
+                        if cm:
+                            call.update({"resolved_file": cf, "resolved_function": cm, "resolution": "typed"})
+                            from_node = {"type": "FUNCTION", "file": file_path, "function": caller0 if caller0 != "GLOBAL" else "GLOBAL_SCOPE"}
+                            if call.get("caller_class"):
+                                from_node["class"] = call["caller_class"]
+                            if call.get("call_id"):
+                                replaced.add(call["call_id"])
+                            self.add_execution_edge(from_node=from_node, to_node={"type": "FUNCTION", "file": cf, "function": cfn},
+                                                    edge_type="FUNCTION_CALL", is_test=bool(call.get("is_test")), call_id=call.get("call_id"))
+                            continue
                     # bare call that nothing defined: a language builtin, or a name imported
                     # from a package outside the project -> say so instead of leaving None
                     if func in self.builtin_function_names():
@@ -1190,6 +1313,14 @@ class GraphBuilder:
                     # `session().get()` / `self.factory().run()`: the receiver is a call whose
                     # return type infer_types_from_returns learned
                     t = self._return_type_of_call(file_path, caller, recv)
+                    if t:
+                        typed_file, typed_meta = self.resolve_method(file_path, t, func)
+                        typed_class, how = t, "typed"
+                if not typed_meta and recv.startswith(("self.", "this.")) and recv.count(".") == 1 and call.get("caller_class"):
+                    # `self.checker.visit(...)`: the field's type may only be known now
+                    # (assigned in a base class from a subclass attribute, see
+                    # infer_class_attribute_injection)
+                    t = self.resolve_field_type(file_path, call["caller_class"], recv.split(".", 1)[1])
                     if t:
                         typed_file, typed_meta = self.resolve_method(file_path, t, func)
                         typed_class, how = t, "typed"
@@ -1620,6 +1751,8 @@ class GraphBuilder:
             metadata["static"] = True
         if sm.get("function.fixture"):
             metadata["fixture"] = sm.get("function.fixture")  # True, or the injected name
+        if sm.get("function.parent"):
+            metadata["parent"] = sm.get("function.parent")  # enclosing def of a nested def
         if getattr(sm, "is_test", False):
             metadata["is_test"] = True
 
@@ -1956,9 +2089,12 @@ class GraphBuilder:
         # ==============================================
         # FALLBACK 3 — LOCAL DEFINITION
         # ==============================================
-        if not resolved_function and not obj:
+        if not resolved_function and not obj and not self._is_parameter(sm.file_path, sm.owner_function, func):
             # nearest module-level definition before the call site: a bundle defines
-            # `edit$1` twice and last-wins picked the wrong one (JS precision audit)
+            # `edit$1` twice and last-wins picked the wrong one (JS precision audit).
+            # Not when the name is a PARAMETER of the calling function: `make_app(...)`
+            # inside a fixture that takes `make_app` calls whatever was injected, not the
+            # same-named fixture function in this file.
             local_function = self.function_index.resolve_nearest(sm.file_path, func, sm.start_point[0] + 1 if sm.start_point else None)
             if local_function:
                 resolved_file = sm.file_path
@@ -3107,6 +3243,7 @@ class GraphBuilder:
 
                 "function":
                     owner_fn,
+                "class": getattr(sm, "owner_class", None),
 
                 "variable": variable,
 
@@ -3197,6 +3334,7 @@ class GraphBuilder:
 
                 "function":
                     owner_fn,
+                "class": getattr(sm, "owner_class", None),
 
                 "variable": variable,
 
@@ -3321,6 +3459,11 @@ class GraphBuilder:
     def handle_variable_type(self, sm):
         variable = sm.get("assign.variable") or sm.get("field.variable")
         value = sm.get("assign.value")
+        if sm.get("assign.class") and variable and not sm.owner_function:
+            # class attribute: keep the raw value so `self.ATTR(...)` and subclass overrides
+            # (`CHECKER_CLASS = VariablesChecker`) can be resolved later
+            entry = self.graph["classes"].setdefault(sm.file_path, {}).setdefault(sm.get("assign.class"), {"superclass": None})
+            entry.setdefault("attrs", {})[variable] = (value or "").strip()
         
         class_name = sm.get("assign.type") or sm.get("assign.value_type") or sm.get("field.type")
         if not class_name and value:

@@ -278,6 +278,41 @@ FIXTURE = {
         @pytest.fixture(name="eng")
         def _make_engine():
             return Engine(Gear())
+
+
+        @pytest.fixture
+        def make_engine():
+            # sphinx's make_app: the fixture yields a FACTORY; tests call it to get the object
+            def make(*args):
+                engine_ = Engine(Gear())
+                return engine_
+            yield make
+
+
+        @pytest.fixture
+        def factory_app(make_engine):
+            app_ = make_engine(1)
+            yield app_
+        """),
+    # pylint's pattern: the base test class builds self.checker from a class attribute
+    # that each subclass overrides
+    "tests/checker_base.py": textwrap.dedent("""\
+        class CheckerTestCase:
+            CHECKER_CLASS = None
+
+            def setup_method(self):
+                self.checker = self.CHECKER_CLASS(0)
+        """),
+    "tests/test_checker.py": textwrap.dedent("""\
+        from checker_base import CheckerTestCase
+        from pkg.core.parts import Cache
+
+
+        class TestCacheChecker(CheckerTestCase):
+            CHECKER_CLASS = Cache
+
+            def test_warm(self):
+                self.checker.warm_up()
         """),
     "tests/test_fixture.py": textwrap.dedent("""\
         import pytest
@@ -290,6 +325,15 @@ FIXTURE = {
 
         def test_named(eng):
             eng.tick()
+
+
+        def test_factory(factory_app):
+            factory_app.start()
+
+
+        def test_factory_direct(make_engine):
+            e = make_engine(2)
+            e.tick()
 
 
         class TestWithFixture:
@@ -488,6 +532,23 @@ def main():
         c = calls(g2, "tests/test_fixture.py").get(("gear", "spin"))
         check("a fixture defined as a method of the test class types the sibling test's parameter -> gear.spin() resolves to Gear.spin",
               c is not None and c.get("resolved_class") == "Gear", c)
+        # factory fixtures (sphinx make_app) and class-attribute injection (pylint CHECKER_CLASS)
+        c = calls(g2, "tests/test_fixture.py").get(("factory_app", "start"))
+        check("fixture that yields a factory's result (app_ = make_engine(...)) -> factory_app.start() resolves to Engine.start",
+              c is not None and c.get("resolved_class") == "Engine", c)
+        c = calls(g2, "tests/test_fixture.py").get((None, "make_engine"))
+        check("calling the injected factory (make_engine(2)) links to the inner `make` function",
+              c is not None and (c.get("resolved_function") or {}).get("name") == "make", c)
+        c = calls(g2, "tests/test_fixture.py").get(("e", "tick"))
+        check("e = make_engine(2); e.tick() -> Engine.tick (through the factory's return)", c is not None and c.get("resolved_class") == "Engine", c)
+        c = calls(g2, "tests/test_checker.py").get(("self.checker", "warm_up"))
+        check("self.checker (assigned in a base class from self.CHECKER_CLASS(...), overridden in the subclass) -> Cache.warm_up",
+              c is not None and c.get("resolved_class") == "Cache", c)
+        c = calls(g2, "tests/checker_base.py").get(("self", "CHECKER_CLASS"))
+        check("the base class's self.CHECKER_CLASS(...) links to every subclass value's class as candidates",
+              c is not None and c.get("resolution") == "candidates" and any(x["function"] == "Cache" for x in c.get("candidates", [])), c)
+        tests_for = srv.mcp_tests_for(target="FUNCTION:src/pkg/core/parts.py:Cache.warm_up", hops=1)
+        check("mcp_tests_for(Cache.warm_up) names test_checker.py::test_warm", any(t.get("function") == "test_warm" for t in tests_for.get("tests", [])), tests_for)
         # base_fn is called by nothing: no call chain reaches a test, but tests/test_engine.py
         # imports pkg (whose __init__ re-exports from engine) -> file-level fallback
         tf2 = srv.mcp_tests_for(target="FUNCTION:src/pkg/base.py:base_fn", hops=2)

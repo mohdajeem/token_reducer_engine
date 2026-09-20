@@ -604,6 +604,36 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                     capture_dict["reexport.star"] = rx["star"]
                     capture_dict["reexport.names"] = rx["names"]
 
+                if match_type == "VARIABLE_ASSIGNMENT":
+                    # `CHECKER_CLASS = VariablesChecker` directly in a class body: a class
+                    # attribute, owned by the class (pylint's test cases inject checkers this way)
+                    par = identity_node.parent
+                    hops = 0
+                    while par is not None and hops < 4:
+                        if par.type in ("class_body", "block") and par.parent is not None and par.parent.type in ("class_definition", "class_declaration", "class"):
+                            capture_dict["assign.class"] = _class_name_of(par.parent)
+                            break
+                        if par.type in ("function_definition", "function_declaration", "method_definition", "arrow_function", "function_expression"):
+                            break
+                        par = par.parent
+                        hops += 1
+
+                if match_type == "FUNCTION_DEF":
+                    # a def nested in another def (a factory's inner function, a fixture that
+                    # yields a closure): remember the parent so return typing can see through it
+                    fnode0 = match_dict.get("function.node")
+                    fnode0 = fnode0[0] if isinstance(fnode0, list) else fnode0
+                    par = fnode0.parent if fnode0 is not None else None
+                    while par is not None:
+                        if par.type in ("function_definition",):
+                            nm = par.child_by_field_name("name")
+                            if nm is not None:
+                                capture_dict["function.parent"] = _text(nm)
+                            break
+                        if par.type in ("class_definition", "module", "program"):
+                            break
+                        par = par.parent
+
                 if match_type == "CLASS_DEF":
                     cnode = match_dict.get("class.node")
                     cnode = cnode[0] if isinstance(cnode, list) else cnode

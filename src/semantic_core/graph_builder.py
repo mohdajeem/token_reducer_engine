@@ -920,7 +920,8 @@ class GraphBuilder:
                 if isinstance(fn, dict) and fn.get("fixture"):
                     t = ret.get((f, fn["name"]))
                     if t:
-                        fixtures.setdefault(fn["name"], []).append((f, t))
+                        injected = fn["fixture"] if isinstance(fn["fixture"], str) else fn["name"]
+                        fixtures.setdefault(injected, []).append((f, t))
         if not fixtures:
             return 0
         import posixpath
@@ -1585,7 +1586,7 @@ class GraphBuilder:
         if sm.get("function.static"):
             metadata["static"] = True
         if sm.get("function.fixture"):
-            metadata["fixture"] = True
+            metadata["fixture"] = sm.get("function.fixture")  # True, or the injected name
         if getattr(sm, "is_test", False):
             metadata["is_test"] = True
 

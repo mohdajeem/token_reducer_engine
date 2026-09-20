@@ -365,14 +365,17 @@ def _is_static_method(fnode):
 
 
 def _is_pytest_fixture(fnode):
-    """A def decorated with @pytest.fixture / @fixture / @pytest.fixture(scope=...)."""
+    """A def decorated with @pytest.fixture / @fixture / @pytest.fixture(scope=...).
+    Returns False, True, or the injected name when the decorator says name="...". """
     if fnode.type != "function_definition" or fnode.parent is None or fnode.parent.type != "decorated_definition":
         return False
     for ch in fnode.parent.children:
         if ch.type == "decorator":
-            t = _text(ch).strip("@ ").split("(")[0].strip()
+            full = _text(ch).strip("@ ")
+            t = full.split("(")[0].strip()
             if t in ("fixture", "pytest.fixture", "pytest_asyncio.fixture") or t.endswith(".fixture"):
-                return True
+                m = _re.search(r"""name\s*=\s*['"]([A-Za-z_]\w*)['"]""", full)
+                return m.group(1) if m else True
     return False
 
 
@@ -626,8 +629,10 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                         capture_dict["function.superclass"] = sup
                     if fnode is not None and _is_static_method(fnode):
                         capture_dict["function.static"] = True
-                    if fnode is not None and _is_pytest_fixture(fnode):
-                        capture_dict["function.fixture"] = True
+                    if fnode is not None:
+                        fx = _is_pytest_fixture(fnode)
+                        if fx:
+                            capture_dict["function.fixture"] = fx  # True, or the name= override
                     if fnode is not None:
                         # receiver types: JSDoc `@param {Engine} e`, TS `(e: Engine)`, and
                         # `this.field = new X()` / `this.field = typedParam` in the body

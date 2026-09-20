@@ -259,10 +259,32 @@ FIXTURE = {
         def app():
             engine = Engine(Gear())
             yield engine
+
+
+        @pytest.fixture(name="eng")
+        def _make_engine():
+            return Engine(Gear())
         """),
     "tests/test_fixture.py": textwrap.dedent("""\
+        import pytest
+        from pkg.core.parts import Gear
+
+
         def test_start(app):
             app.start()
+
+
+        def test_named(eng):
+            eng.tick()
+
+
+        class TestWithFixture:
+            @pytest.fixture
+            def gear(self):
+                return Gear()
+
+            def test_spin(self, gear):
+                gear.spin()
         """),
 }
 
@@ -437,6 +459,11 @@ def main():
               c is not None and c.get("resolved_class") == "Engine", c)
         tests_for = srv.mcp_tests_for(target=f"FUNCTION:{E}:Engine.start", hops=1)
         check("mcp_tests_for(Engine.start) names tests/test_fixture.py::test_start", any(t.get("function") == "test_start" for t in tests_for.get("tests", [])), tests_for)
+        c = calls(g2, "tests/test_fixture.py").get(("eng", "tick"))
+        check("@pytest.fixture(name='eng') injects under the override name -> eng.tick() resolves", c is not None and c.get("resolved_class") == "Engine", c)
+        c = calls(g2, "tests/test_fixture.py").get(("gear", "spin"))
+        check("a fixture defined as a method of the test class types the sibling test's parameter -> gear.spin() resolves to Gear.spin",
+              c is not None and c.get("resolved_class") == "Gear", c)
     finally:
         os.environ.pop("SEMANTIC_INDEX_TESTS", None)
 

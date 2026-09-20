@@ -1,3 +1,4 @@
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -325,6 +326,7 @@ class GraphBuilder:
             self.infer_types_from_returns()
             self.infer_fixture_param_types()
             self.resolve_pending_calls()
+            self.resolve_dispatch_calls()
             after = sum(1 for calls in self.graph["calls"].values() for c in calls if c.get("resolved_function"))
             n_types2 = sum(len(v) for scopes in self.symbol_table.types.values() for v in scopes.values())
             n_ret = len(getattr(self, "_return_types", None) or {})
@@ -958,6 +960,126 @@ class GraphBuilder:
                     n += 1
         return n
 
+    _DICT_ENTRY_RE = re.compile(r"""(?:[\"']([^\"']+)[\"']|([A-Za-z_]\w*))\s*:\s*([A-Za-z_$][\w$.]*)\s*(?=[,}\n])""")
+
+    def _callable_target(self, file_path, owner_class, ref):
+        """(file, metadata) for a function reference in a dict literal: `and_`, `self.f`,
+        `Cls.m`, `mod.f`; None if the name is not a function we know."""
+        if "(" in ref:
+            return None
+        if ref.startswith(("self.", "this.", "cls.")) and owner_class:
+            return self.resolve_method(file_path, owner_class, ref.split(".", 1)[1])
+        if "." in ref:
+            head, name = ref.rsplit(".", 1)
+            if head[:1].isupper() and self.resolve_class_file(file_path, head):
+                return self.resolve_method(file_path, head, name, _want_static=True)
+            f = self.symbol_table.resolve_import(file_path, head)
+            if f:
+                f2, m2, _ = self.resolve_through_reexports(f, name)
+                return (f2, m2) if m2 else None
+            return None
+        meta = self.function_index.resolve_function(file_path, ref)
+        if meta and meta.get("kind") != "class":
+            return file_path, meta
+        f = self.symbol_table.resolve_import(file_path, ref)
+        if f:
+            f2, m2, _ = self.resolve_through_reexports(f, self.symbol_table.resolve_imported_name(file_path, ref) or ref)
+            return (f2, m2) if m2 else None
+        for src in self.symbol_table.star_imports.get(file_path, []):
+            f2, m2, _ = self.resolve_through_reexports(src, ref)
+            if m2:
+                return f2, m2
+        return None
+
+    def build_dispatch_tables(self):
+        """(file, name) -> [(file, metadata)] for every dict literal whose values are ALL
+        function references (at least two): `_ops = {'&': and_, '|': or_}`,
+        `self.handlers = {"a": self.on_a, "b": self.on_b}`."""
+        tables = {}
+        class_of_fn = {}
+        for f, fns in self.graph["functions"].items():
+            for fn in fns:
+                if isinstance(fn, dict) and fn.get("class"):
+                    class_of_fn.setdefault((f, fn["name"]), fn["class"])
+        for vs in self.graph.get("variable_states", []):
+            val = (vs.get("value") or "").strip()
+            var = vs.get("variable")
+            if not var or not val.startswith("{") or ":" not in val:
+                continue
+            entries = self._DICT_ENTRY_RE.findall(val)
+            if len(entries) < 2:
+                continue
+            f = vs["file"]
+            owner = class_of_fn.get((f, vs.get("function")))
+            targets = []
+            for _k1, _k2, ref in entries:
+                t = self._callable_target(f, owner, ref)
+                if not t or not t[1]:
+                    targets = None
+                    break
+                targets.append(t)
+            if targets:
+                name = var.split(".")[-1]
+                tables.setdefault((f, name), []).extend(x for x in targets if x not in tables.get((f, name), []))
+        self._dispatch_tables = tables
+        return tables
+
+    def resolve_dispatch_calls(self):
+        """Link computed-callee calls: dispatch tables to every value they hold
+        (confidence="dispatch"), getattr(self, "prefix_"+x)() to every method of the class
+        with that prefix (confidence="dynamic"). Consumers can weigh or drop these."""
+        tables = self.build_dispatch_tables()
+        edges = self.graph["execution_edges"]
+        first_new = len(edges)
+        replaced = set()
+        for file_path, calls in self.graph["calls"].items():
+            for call in calls:
+                d = call.get("dispatch")
+                if not d or call.get("resolved_function"):
+                    continue
+                targets, conf = [], None
+                if d["kind"] == "dispatch":
+                    t = tables.get((file_path, d["table"]))
+                    if not t and d.get("table"):
+                        # a table imported from another module
+                        f = self.symbol_table.resolve_import(file_path, d["table"])
+                        if f:
+                            t = tables.get((f, d["table"]))
+                    targets, conf = list(t or []), "dispatch"
+                elif d["kind"] == "dynamic":
+                    recv, prefix = call.get("receiver"), d.get("prefix") or ""
+                    cls = None
+                    if recv in ("self", "cls") and call.get("caller_class"):
+                        cls = call["caller_class"]
+                    elif recv:
+                        cls = self.symbol_table.resolve_type(file_path, call.get("caller_function") or "GLOBAL", recv)
+                    if cls and prefix:
+                        cf = self.resolve_class_file(file_path, cls) or file_path
+                        for fn in self.graph["functions"].get(cf, []):
+                            if isinstance(fn, dict) and fn.get("class") == cls and fn["name"].startswith(prefix):
+                                targets.append((cf, fn))
+                    conf = "dynamic"
+                if not targets:
+                    continue
+                from_node = {"type": "FUNCTION", "file": file_path,
+                             "function": call.get("caller_function") or "GLOBAL_SCOPE"}
+                if call.get("caller_class"):
+                    from_node["class"] = call["caller_class"]
+                call.update({"resolved_file": targets[0][0], "resolved_function": targets[0][1],
+                             "resolved_class": targets[0][1].get("class"), "resolution": conf,
+                             "candidates": [{"file": tf, "function": tm["name"], "class": tm.get("class")} for tf, tm in targets]})
+                if call.get("call_id"):
+                    replaced.add(call["call_id"])
+                for tf, tm in targets:
+                    self.add_execution_edge(from_node=dict(from_node),
+                                            to_node={"type": "FUNCTION", "file": tf, "function": tm["name"],
+                                                     **({"class": tm["class"]} if tm.get("class") else {})},
+                                            edge_type="FUNCTION_CALL", is_test=bool(call.get("is_test")), call_id=call.get("call_id"))
+                    self.graph["execution_edges"][-1]["confidence"] = conf
+        if replaced:
+            self.graph["execution_edges"] = [e for i, e in enumerate(self.graph["execution_edges"])
+                                             if i >= first_new or e.get("call_id") not in replaced]
+
     def _orm_queryset_class(self, file_path):
         """"QuerySet" when the project defines exactly one class of that name (Django itself,
         or an app vendoring the ORM); None otherwise so nothing is guessed elsewhere."""
@@ -1538,7 +1660,37 @@ class GraphBuilder:
                 self.graph["execution_edges"][-1]["via"] = "constructor"
                 return
 
+    _DISPATCH_TABLE_RE = re.compile(r"^\s*(?:self\.|this\.|cls\.)?([A-Za-z_$][\w$]*)\s*(?:\[|\.get\s*\()")
+    _GETATTR_RE = re.compile(r"^\s*getattr\s*\(\s*([A-Za-z_][\w.]*)\s*,\s*(?:f?[\"']([A-Za-z_][\w]*?)(?:\{|[\"']\s*\+))")
+
+    def handle_dispatch_call(self, sm):
+        """A call whose callee is computed: `_ops[op](...)`, `handlers.get(k)(...)`,
+        `getattr(self, "visit_" + name)(...)`. Recorded now (with the callee text); the
+        targets are linked in resolve_dispatch_calls once every definition is known."""
+        expr = (sm.get("call.dispatch") or "").strip()
+        m = self._GETATTR_RE.match(expr)
+        kind = table = prefix = recv = None
+        if m:
+            kind, recv, prefix = "dynamic", m.group(1), m.group(2)
+        else:
+            m2 = self._DISPATCH_TABLE_RE.match(expr)
+            if m2:
+                kind, table = "dispatch", m2.group(1)
+                recv = expr.split(table)[0].strip().rstrip(".") or None
+        if not kind:
+            return
+        self.ensure_file("calls", sm.file_path)
+        self.graph["calls"][sm.file_path].append({
+            "call_id": self.build_call_id(sm), "object": None, "receiver": recv,
+            "function": table or f"getattr:{prefix}*", "resolved_file": None, "resolved_function": None,
+            "caller_function": sm.owner_function, "caller_class": getattr(sm, "owner_class", None),
+            "is_test": bool(getattr(sm, "is_test", False)),
+            "dispatch": {"kind": kind, "table": table, "prefix": prefix, "expr": expr[:120]},
+        })
+
     def handle_call(self, sm):
+        if sm.get("call.dispatch") and not sm.get("call.func_name"):
+            return self.handle_dispatch_call(sm)
         # print("\nCALL MATCH")
         # print("start:", sm.start_byte)
         # print("end:", sm.end_byte)

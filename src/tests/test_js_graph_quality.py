@@ -185,6 +185,15 @@ FIXTURE = {
         Chart.register(1, 2);
         Chart.reset();
         """),
+    "src/dispatch.js": textwrap.dedent("""\
+        function onClick(e) { return 'click'; }
+        function onKey(e) { return 'key'; }
+        function unrelated() { return 0; }
+        const handlers = { click: onClick, keydown: onKey };
+        export function fire(type, e) {
+          return handlers[type](e);
+        }
+        """),
     "test/engine.test.js": textwrap.dedent("""\
         import { boot } from '../src/index';
         describe('boot', () => {
@@ -403,7 +412,7 @@ def main():
           len(reg_edges) == 1 and reg_edges[0]["to"]["file"] == "src/chart.js" and reg_edges[0]["to"].get("class") == "Chart", reg_edges)
     import collections
     per_call = collections.Counter(e.get("call_id") for e in graph["execution_edges"]
-                                   if e.get("call_id") and e.get("confidence") != "candidates" and e.get("via") != "constructor")
+                                   if e.get("call_id") and e.get("confidence") not in ("candidates", "dispatch", "dynamic") and e.get("via") != "constructor")
     check("no call_id has more than one edge anywhere in the fixture graph", all(v == 1 for v in per_call.values()),
           [k for k, v in per_call.items() if v > 1])
 
@@ -417,6 +426,11 @@ def main():
     check("every `new Engine()` also gets an edge to Engine.constructor (via=constructor)", len(ctor_edges) >= 2, ctor_edges[:2])
     ia_ctor = srv.mcp_impact_analysis(target="FUNCTION:src/core/engine.js:Engine.constructor", direction="UPSTREAM", max_depth=1)
     check("impact of Engine.constructor lists the functions that instantiate Engine", any(n.get("function") == "boot" for n in ia_ctor.get("upstream_nodes", [])), ia_ctor.get("upstream_nodes"))
+
+    # ---------- 17. dispatch tables: handlers[type](e) -> every value, flagged
+    de = [(e["to"].get("function"), e.get("confidence")) for e in graph["execution_edges"] if e["from"]["file"] == "src/dispatch.js" and e["from"].get("function") == "fire"]
+    check("handlers[type](e) links fire() to onClick and onKey (confidence=dispatch), not to unrelated",
+          ("onClick", "dispatch") in de and ("onKey", "dispatch") in de and not any(f == "unrelated" for f, _ in de), de)
 
     # ---------- 14. skeleton view
     sk = srv.mcp_skeleton(file_path="src/core/engine.js", keywords=["helper", "turbo"])

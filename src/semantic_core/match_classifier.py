@@ -106,6 +106,9 @@ def classify_match(capture_names):
 
     if "call.new_class" in capture_set:
         return "CALL"
+
+    if "call.dispatch" in capture_set:
+        return "CALL"
     
 
     # ======================================================

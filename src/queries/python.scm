@@ -93,6 +93,13 @@
 (call
   function: (identifier) @call.func_name)
 
+; `_ops[op](a, b)` / `handlers.get(k)(x)` / `getattr(self, "visit_" + n)(node)`: the callee
+; is computed; the builder links every plausible target, flagged dispatch / dynamic
+(call
+  function: (subscript) @call.dispatch)
+(call
+  function: (call) @call.dispatch)
+
 (call
   function: (attribute
     object: (_) @call.obj_name
@@ -112,6 +119,13 @@
 (assignment
   left: (identifier) @assign.variable
   right: (_) @assign.value)
+
+; `self.handlers = {...}` / `self.engine = Engine()`: field assignments are variable states
+; too (dispatch tables live on instances; `self.x.m()` can be typed from them)
+(assignment
+  left: (attribute) @assign.variable
+  right: (_) @assign.value
+  (#match? @assign.variable "^self\."))
 
 ; `with Session() as s:` binds s exactly like `s = Session()`
 (with_item

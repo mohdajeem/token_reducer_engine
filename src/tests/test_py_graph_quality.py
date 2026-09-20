@@ -199,6 +199,49 @@ FIXTURE = {
             n = Count('id')
             return ordered.values_list('title')
         """),
+    # dispatch tables and getattr-built method names (astropy's _operators, django's visitors)
+    "src/pkg/dispatch.py": textwrap.dedent("""\
+        def and_(a, b):
+            return a and b
+
+
+        def or_(a, b):
+            return a or b
+
+
+        _ops = {'&': and_, '|': or_}
+
+
+        def apply(op, a, b):
+            return _ops[op](a, b)
+
+
+        def apply_get(op, a, b):
+            return _ops.get(op)(a, b)
+
+
+        class Visitor:
+            def __init__(self):
+                self.handlers = {"num": self.visit_num, "name": self.visit_name}
+
+            def visit_num(self, node):
+                return 1
+
+            def visit_name(self, node):
+                return 2
+
+            def other(self, node):
+                return 3
+
+            def dispatch(self, node):
+                return self.handlers[node.kind](node)
+
+            def dynamic(self, node):
+                return getattr(self, "visit_" + node.kind)(node)
+
+            def dynamic_f(self, node):
+                return getattr(self, f"visit_{node.kind}")(node)
+        """),
     "tests/test_engine.py": textwrap.dedent("""\
         from pkg import boot
 
@@ -348,6 +391,26 @@ def main():
           c is not None and c.get("resolved_file") == "src/orm/aggregates.py" and (c.get("resolved_function") or {}).get("kind") == "class", c)
     ia = srv.mcp_impact_analysis(target="FUNCTION:src/orm/query.py:QuerySet._clone", direction="UPSTREAM", max_depth=4)
     check("blast radius of QuerySet._clone reaches newest_titles() through _chain/filter", any(n.get("function") == "newest_titles" for n in ia.get("upstream_nodes", [])), [n.get("function") for n in ia.get("upstream_nodes", [])])
+
+    # ---------- 3f. dispatch tables and getattr(self, "prefix_" + x)()
+    D = "src/pkg/dispatch.py"
+    def edges_to(fn_name):
+        return [(e["from"].get("function"), e.get("confidence")) for e in graph["execution_edges"] if e["to"].get("file") == D and e["to"].get("function") == fn_name]
+    check("_ops[op](a, b) links to BOTH and_ and or_ flagged confidence=dispatch",
+          ("apply", "dispatch") in edges_to("and_") and ("apply", "dispatch") in edges_to("or_"), (edges_to("and_"), edges_to("or_")))
+    check("_ops.get(op)(a, b) links the same way", ("apply_get", "dispatch") in edges_to("and_"), edges_to("and_"))
+    check("self.handlers[k](node) links to visit_num and visit_name but NOT other",
+          ("dispatch", "dispatch") in edges_to("visit_num") and ("dispatch", "dispatch") in edges_to("visit_name") and not any(f == "dispatch" for f, _ in edges_to("other")),
+          (edges_to("visit_num"), edges_to("other")))
+    check("getattr(self, 'visit_' + kind)(node) links to every visit_* method flagged dynamic",
+          ("dynamic", "dynamic") in edges_to("visit_num") and ("dynamic", "dynamic") in edges_to("visit_name") and not any(f == "dynamic" for f, _ in edges_to("other")),
+          (edges_to("visit_num"), edges_to("other")))
+    check("getattr(self, f'visit_{kind}')(node) (f-string prefix) links the same way", ("dynamic_f", "dynamic") in edges_to("visit_num"), edges_to("visit_num"))
+    dc = [c for c in graph["calls"].get(D, []) if c.get("dispatch")]
+    check("dispatch call records carry resolution + candidates", dc and all(c.get("resolution") in ("dispatch", "dynamic") and c.get("candidates") for c in dc), dc[:2])
+    ia = srv.mcp_impact_analysis(target=f"FUNCTION:{D}:Visitor.visit_name", direction="UPSTREAM", max_depth=1)
+    check("impact of visit_name lists dispatch/dynamic callers with low confidence noted",
+          {n.get("function") for n in ia.get("upstream_nodes", [])} >= {"dispatch", "dynamic", "dynamic_f"} and (ia.get("completeness") or {}).get("low_confidence_edges", 0) >= 3, ia)
 
     # ---------- 4. external
     c = ac.get(("json", "dumps"))

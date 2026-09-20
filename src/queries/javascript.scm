@@ -258,6 +258,14 @@
   function: (identifier) @call.func_name
 )
 
+; `handlers[type](e)` / `table.get(k)(x)`: computed callee -> dispatch-table edges
+(call_expression
+  function: (subscript_expression) @call.dispatch
+)
+(call_expression
+  function: (call_expression) @call.dispatch
+)
+
 (call_expression
   function: (member_expression
     object: (_) @call.obj_name

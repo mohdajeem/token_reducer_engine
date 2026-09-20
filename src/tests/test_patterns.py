@@ -267,6 +267,76 @@ pattern("dunder-call", {
 ])
 
 
+# --------------------------------------------------------------------------- js-generated-titles
+# markedjs/marked test/specs/marked/marked-spec.js: tests are generated from a JSON spec in a
+# loop, titled with a template string; the failing id is "Marked Table cells should pass example 9"
+pattern("js-generated-titles", {
+    "package.json": '{"name": "pat"}',
+    "src/marked.js": textwrap.dedent("""        import { Lexer } from './lexer';
+        export function marked(src) {
+          const tokens = Lexer.lex(src);
+          return tokens.join('');
+        }
+        """),
+    "src/lexer.js": textwrap.dedent("""        export class Lexer {
+          static lex(src) {
+            const lexer = new Lexer();
+            return lexer.token(src);
+          }
+          token(src) {
+            return src.split('|');
+          }
+        }
+        """),
+    "test/specs/marked-spec.js": textwrap.dedent("""        import { marked } from '../../src/marked';
+        const spec = [{ example: 5, markdown: 'a|b' }, { example: 9, markdown: 'c' }];
+        describe('Marked Table cells', () => {
+          spec.forEach((example) => {
+            it(`should pass example ${example.example}`, () => {
+              expect(marked(example.markdown)).toBeTruthy();
+            });
+          });
+        });
+        """),
+}, [
+    ("FUNCTION:src/lexer.js:Lexer.token", "should pass example ${example.example}", 4),
+])
+
+
+# --------------------------------------------------------------------------- js-shared-fixture-var
+# processing/p5.js test/unit/*.js: the object under test is created in beforeEach and used in
+# every `it`; the variable lives in the describe callback, not in the test function
+pattern("js-shared-fixture-var", {
+    "package.json": '{"name": "pat"}',
+    "src/p5.js": textwrap.dedent("""        export class p5 {
+          constructor(sketch) { this.sketch = sketch; }
+          loadStrings(path) { return this._load(path); }
+          _load(path) { return [path]; }
+          remove() { return null; }
+        }
+        """),
+    "test/unit/io/files_input.js": textwrap.dedent("""        import { p5 } from '../../../src/p5';
+        describe('Files', () => {
+          let myp5;
+          beforeEach(() => {
+            myp5 = new p5(() => {});
+          });
+          afterEach(() => {
+            myp5.remove();
+          });
+          describe('p5.prototype.loadStrings', () => {
+            it('should include empty strings', () => {
+              const strings = myp5.loadStrings('empty_lines.txt');
+              expect(strings.length).toBe(1);
+            });
+          });
+        });
+        """),
+}, [
+    ("FUNCTION:src/p5.js:p5._load", "should include empty strings", 4),
+])
+
+
 def write(files):
     root = Path(tempfile.mkdtemp(prefix="pattern_"))
     for rel, content in files.items():

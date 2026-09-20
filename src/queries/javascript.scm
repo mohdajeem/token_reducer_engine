@@ -227,7 +227,10 @@
 (call_expression
   function: (identifier) @test.runner (#match? @test.runner "^(it|test|describe|suite|context|specify)$")
   arguments: (arguments
-    (string (string_fragment) @function.name)
+    [
+      (string (string_fragment) @function.name)
+      (template_string) @function.name
+    ]
     [
       (arrow_function)
       (function_expression)

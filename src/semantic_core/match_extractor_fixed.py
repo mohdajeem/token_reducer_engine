@@ -651,6 +651,12 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                     capture_dict.pop("class.heritage", None)
 
                 if match_type == "FUNCTION_DEF":
+                    fn_name0 = capture_dict.get("function.name")
+                    if isinstance(fn_name0, str) and len(fn_name0) > 1 and fn_name0[0] == "`" and fn_name0[-1] == "`":
+                        # a generated test title, it(`should pass example ${n}`): keep the
+                        # template text; `${...}` parts are wildcards when a failing test id
+                        # is mapped onto this node
+                        capture_dict["function.name"] = fn_name0[1:-1]
                     fnode = match_dict.get("function.node")
                     fnode = fnode[0] if isinstance(fnode, list) else fnode
                     cls, sup = find_owner_class(fnode) if fnode is not None else (None, None)

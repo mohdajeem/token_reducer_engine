@@ -105,6 +105,26 @@
     object: (_) @call.obj_name
     attribute: (identifier) @call.func_name))
 
+; Implicit protocol calls -- no call syntax, but a method runs: `for x in obj` calls
+; obj.__iter__, `obj[k]` calls __getitem__, `with obj` calls __enter__. Recorded as calls
+; of the dunder on the receiver; resolved only through a KNOWN receiver type (never by
+; unique-name guessing, every iterable defines __iter__).
+(for_statement
+  right: (_) @call.proto_iter)
+(subscript
+  value: (_) @call.proto_getitem)
+(with_item
+  value: (_) @call.proto_enter)
+(call
+  function: (identifier) @_len (#eq? @_len "len")
+  arguments: (argument_list (_) @call.proto_len))
+
+; `for search in (GridSearchCV(), RandomizedSearchCV()):` -- the loop target takes every
+; element's type (candidates)
+(for_statement
+  left: (identifier) @assign.variable
+  right: (_) @assign.value)
+
 (call
   function: (identifier) @call.class_name
   (#match? @call.class_name "^[A-Z]"))
@@ -236,7 +256,8 @@
   (_) @return.value)
 
 (class_definition
-  name: (identifier) @contract.name)
+  name: (identifier) @contract.name
+  superclasses: (argument_list . (_) @contract.superclass)?)
 
 (function_definition
   name: (identifier) @export.name)

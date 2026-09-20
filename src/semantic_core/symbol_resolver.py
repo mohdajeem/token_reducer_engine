@@ -22,7 +22,7 @@ class SymbolResolver:
             return js_match.group(1)
             
         # Python/Factory instantiation: ClassName(...) / module.ClassName(...) (uppercase name)
-        py_match = re.match(r"^(?:[a-z_][\w]*\.)*([A-Z][A-Za-z0-9_]*)\(", assignment_value.strip())
+        py_match = re.match(r"^(?:[a-z_][\w]*\.)*(_*[A-Z][A-Za-z0-9_]*)\(", assignment_value.strip())
         if py_match:
             return py_match.group(1)
             

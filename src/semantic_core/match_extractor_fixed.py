@@ -545,6 +545,13 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                 if match_type == "CALL":
 
                     call_info = normalize_call_expression(raw_nodes)
+                    proto = [n for k, n in match_dict.items() if k.startswith("call.proto_")]
+                    if proto:
+                        # an implicit protocol call (`for x in obj`, `obj[k]`, `len(obj)`) is
+                        # keyed on its own expression, not on an enclosing call, so it never
+                        # collides with a real call at the same site (`len(obj)` is both)
+                        pn = proto[0][0] if isinstance(proto[0], list) else proto[0]
+                        call_info = {"call.start": pn.start_byte, "call.end": pn.end_byte}
 
                     if call_info:
 

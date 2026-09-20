@@ -324,6 +324,7 @@ class GraphBuilder:
             self.build_argument_parameter_flow()
             self.infer_parameter_types_from_flow()
             self.infer_types_from_returns()
+            self.infer_stored_callables()
             self.infer_fixture_param_types()
             self.infer_class_attribute_injection()
             self.resolve_pending_calls()
@@ -914,13 +915,15 @@ class GraphBuilder:
         self._return_types = ret
         if not ret:
             return 0
-        call_target = {}
+        call_target, class_target = {}, {}
         for f, calls in self.graph["calls"].items():
             for c in calls:
                 rf = c.get("resolved_function")
                 if isinstance(rf, dict) and c.get("function") and rf.get("kind") != "class":
                     call_target.setdefault((f, c.get("caller_function") or "GLOBAL_SCOPE", c["function"]),
                                            (c.get("resolved_file"), rf.get("name")))
+                elif isinstance(rf, dict) and c.get("function") and rf.get("kind") == "class" and c.get("receiver") in ("self", "this", "cls"):
+                    class_target.setdefault((f, c.get("caller_function") or "GLOBAL_SCOPE", c["function"]), rf.get("name"))
         n = 0
         for vs in self.graph.get("variable_states", []):
             var, val, f, fn = vs.get("variable"), vs.get("value") or "", vs.get("file"), vs.get("function") or "GLOBAL_SCOPE"
@@ -938,9 +941,18 @@ class GraphBuilder:
                 ct = self.symbol_table.resolve_type(f, scope, callee)
                 if ct and ct.startswith("callable:"):
                     _, cf, cfn = ct.split(":", 2)
-                    t = ret.get((cf, cfn))
+                    ts = {ret.get((cf, x)) for x in cfn.split("|")} - {None}
+                    t = next(iter(ts)) if len(ts) == 1 else None
+                elif ct and ct.startswith("class:"):
+                    names = ct[6:].split("|")
+                    if len(names) == 1:
+                        t = names[0]
+                    else:
+                        self.param_candidates[(f, scope, var)] = sorted(names)
             if not t:
                 t = ret.get(call_target.get((f, fn, callee), (None, None)))
+            if not t:
+                t = class_target.get((f, fn, callee))  # `v = self.cls()` resolved to a class node
             if t:
                 self.symbol_table.register_type(f, scope, var, t)
                 n += 1
@@ -1147,9 +1159,6 @@ class GraphBuilder:
             m = pat.match(vs.get("value") or "")
             if m:
                 inject.setdefault((vs["file"], cls), {})[var.split(".", 1)[1]] = m.group(1)
-        if not inject:
-            return 0
-
         def chain(file, cls, depth=0):
             out = [(file, cls)]
             entry = (classes.get(file) or {}).get(cls) or {}
@@ -1168,6 +1177,7 @@ class GraphBuilder:
                 for bf, bc in chain(f, cname):
                     for field, attr in inject.get((bf, bc), {}).items():
                         val = attrs.get(attr)
+                        val = _re.sub(r"^(?:staticmethod|classmethod)\(\s*(.+?)\s*\)$", r"\1", val or "")
                         if not val or not _re.match(r"^[A-Za-z_][\w.]*$", val) or val == "None":
                             continue
                         tname = val.split(".")[-1]
@@ -1177,12 +1187,14 @@ class GraphBuilder:
                         if fields.get(field) != tname:
                             fields[field] = tname
                             n += 1
-        # the base-class call site `self.ATTR(...)`: every subclass value is a possible callee
-        if n or inject:
+        # `self.ATTR(...)` where ATTR is a class attribute holding a class (in this class or a
+        # subclass): every such value is a possible callee
+        if True:
             sub_values = {}  # (attr) -> {(file, class name of value)}
             for f, cs in classes.items():
                 for cname, entry in cs.items():
                     for attr, val in (entry.get("attrs") or {}).items():
+                        val = _re.sub(r"^(?:staticmethod|classmethod)\(\s*(.+?)\s*\)$", r"\1", val or "")
                         if val and _re.match(r"^[A-Za-z_][\w.]*$", val) and val != "None":
                             tname = val.split(".")[-1]
                             cf = self.resolve_class_file(f, tname)
@@ -1211,6 +1223,111 @@ class GraphBuilder:
                     if cands:
                         call.update({"resolved_file": cands[0][0], "resolved_function": cands[0][1], "resolution": "candidates",
                                      "candidates": [{"file": cf, "function": m["name"]} for cf, m in cands]})
+        return n
+
+    def _resolve_marker_call(self, file_path, call, caller, ct, replaced):
+        """A bare call `name(...)` where `name` is typed as
+          callable:<file>:<fn>[|<fn>...]   a stored function / bound method (factory fixture,
+                                          `init_func = self._init_from_list`)
+          class:<A>[|<B>...]               a stored class (`plotter = _ScatterPlotter`)
+          <Class>                          an instance -> its __call__
+        Links the call to every target (candidates when more than one). True if linked."""
+        from_node = {"type": "FUNCTION", "file": file_path, "function": caller if caller != "GLOBAL" else "GLOBAL_SCOPE"}
+        if call.get("caller_class"):
+            from_node["class"] = call["caller_class"]
+        targets = []  # (file, meta, class-or-None, ctor?)
+        if ct.startswith("callable:"):
+            _, cf, names = ct.split(":", 2)
+            for cfn in names.split("|"):
+                cm = self.function_index.resolve_function(cf, cfn)
+                if cm:
+                    targets.append((cf, cm, cm.get("class"), False))
+        elif ct.startswith("class:"):
+            for cname in ct[6:].split("|"):
+                cf = self.resolve_class_file(file_path, cname)
+                cm = self.function_index.resolve_function(cf, cname) if cf else None
+                if cm:
+                    targets.append((cf, cm, None, True))
+        else:
+            cf, cm = self.resolve_method(file_path, ct, "__call__")
+            if cm:
+                targets.append((cf, cm, cm.get("class") or ct, False))
+                call["implicit"] = "__call__"
+        if not targets:
+            return False
+        how = "typed" if len(targets) == 1 else "candidates"
+        call.update({"resolved_file": targets[0][0], "resolved_function": targets[0][1],
+                     "resolved_class": targets[0][2], "resolution": how})
+        if len(targets) > 1:
+            call["candidates"] = [{"file": tf, "function": tm["name"], "class": tc} for tf, tm, tc, _ in targets]
+        if call.get("call_id"):
+            replaced.add(call["call_id"])
+        for tf, tm, tc, is_ctor in targets:
+            to_node = {"type": "FUNCTION", "file": tf, "function": tm["name"]}
+            if tc:
+                to_node["class"] = tc
+            self.add_execution_edge(from_node=dict(from_node), to_node=to_node, edge_type="FUNCTION_CALL",
+                                    is_test=bool(call.get("is_test")), call_id=call.get("call_id"))
+            if how == "candidates":
+                self.graph["execution_edges"][-1]["confidence"] = "candidates"
+            if is_ctor:
+                self._constructor_edge(from_node, tf, tm, bool(call.get("is_test")), call.get("call_id"))
+        return True
+
+    def infer_stored_callables(self):
+        """Functions and classes held in variables before being called:
+          init_func = self._init_from_list      (astropy Table.__init__, if/elif chain)
+          plotter = _ScatterPlotter             (seaborn relplot)     -> class:_ScatterPlotter
+          handler = a if cond else b            -> both candidates
+          for search in (GridSearchCV(), RandomizedSearchCV()):  -> candidates on the loop target
+        Registers callable:/class: markers (several assignments to one name in one scope
+        become `|`-joined candidates); loop targets over tuples of instantiations become
+        param_candidates so `search.fit()` resolves to every class."""
+        import re as _re
+        from semantic_core.symbol_resolver import SymbolResolver
+        groups = {}
+        for vs in self.graph.get("variable_states", []):
+            var, f, fn = vs.get("variable"), vs.get("file"), vs.get("function") or "GLOBAL_SCOPE"
+            val = (vs.get("value") or "").strip()
+            if not var or "." in var or not val:
+                continue
+            groups.setdefault((f, fn, var), []).append((val, vs.get("class")))
+        n = 0
+        for (f, fn, var), vals in groups.items():
+            scope = "GLOBAL" if fn == "GLOBAL_SCOPE" else fn
+            existing = self.symbol_table.resolve_type(f, scope, var)
+            if existing and not existing.startswith(("callable:", "class:")):
+                continue
+            methods, classes, insts = [], [], []
+            for val, owner in vals:
+                parts = [v.strip() for v in _re.split(r"\s+if\s+.+?\s+else\s+", val)] if " if " in val and " else " in val else [val]
+                for part in parts:
+                    m = _re.match(r"^(?:self|this)\.([A-Za-z_]\w*)$", part)
+                    if m and owner:
+                        mf, mm = self.resolve_method(f, owner, m.group(1))
+                        if mm:
+                            q = f"{mm.get('class') or owner}.{m.group(1)}"
+                            if q not in methods:
+                                methods.append(q)
+                        continue
+                    m = _re.match(r"^(?:staticmethod|classmethod)\(\s*(_*[A-Z]\w*)\s*\)$", part) or _re.match(r"^(_*[A-Z]\w*)$", part)
+                    if m and self.resolve_class_file(f, m.group(1)):
+                        if m.group(1) not in classes:
+                            classes.append(m.group(1))
+                        continue
+                    if part.startswith(("(", "[")):
+                        for inst in _re.findall(r"(?:^|[\[(,]\s*)((?:[a-z_]\w*\.)*_*[A-Z]\w*)\s*\(", part):
+                            c = SymbolResolver.extract_instantiated_class(inst + "()")
+                            if c and self.resolve_class_file(f, c) and c not in insts:
+                                insts.append(c)
+            if methods:
+                self.symbol_table.register_type(f, scope, var, f"callable:{f}:" + "|".join(methods)); n += 1
+            elif classes:
+                self.symbol_table.register_type(f, scope, var, "class:" + "|".join(classes)); n += 1
+            elif len(insts) == 1:
+                self.symbol_table.register_type(f, scope, var, insts[0]); n += 1
+            elif insts:
+                self.param_candidates[(f, scope, var)] = sorted(insts); n += 1
         return n
 
     def _is_parameter(self, file_path, function_name, name):
@@ -1277,21 +1394,8 @@ class GraphBuilder:
                 if not recv and func and not call.get("dispatch"):
                     caller0 = call.get("caller_function") or "GLOBAL"
                     ct = self.symbol_table.resolve_type(file_path, caller0, func)
-                    if ct and ct.startswith("callable:"):
-                        # `make_app(...)` where make_app is a parameter / variable holding a
-                        # factory's inner function: that function is the callee
-                        _, cf, cfn = ct.split(":", 2)
-                        cm = self.function_index.resolve_function(cf, cfn)
-                        if cm:
-                            call.update({"resolved_file": cf, "resolved_function": cm, "resolution": "typed"})
-                            from_node = {"type": "FUNCTION", "file": file_path, "function": caller0 if caller0 != "GLOBAL" else "GLOBAL_SCOPE"}
-                            if call.get("caller_class"):
-                                from_node["class"] = call["caller_class"]
-                            if call.get("call_id"):
-                                replaced.add(call["call_id"])
-                            self.add_execution_edge(from_node=from_node, to_node={"type": "FUNCTION", "file": cf, "function": cfn},
-                                                    edge_type="FUNCTION_CALL", is_test=bool(call.get("is_test")), call_id=call.get("call_id"))
-                            continue
+                    if ct and self._resolve_marker_call(file_path, call, caller0, ct, replaced):
+                        continue
                     # bare call that nothing defined: a language builtin, or a name imported
                     # from a package outside the project -> say so instead of leaving None
                     if func in self.builtin_function_names():
@@ -1364,6 +1468,8 @@ class GraphBuilder:
                                                         edge_type="FUNCTION_CALL", is_test=bool(call.get("is_test")), call_id=call.get("call_id"))
                                 self.graph["execution_edges"][-1]["confidence"] = "candidates"
                             continue
+                if not typed_meta and call.get("implicit"):
+                    continue  # an implicit dunder call resolves only through a typed receiver
                 if not typed_meta and root[:1].isupper() and root == recv and self.resolve_class_file(file_path, root):
                     # the receiver IS a project class we know, and it has no such method
                     # (defined dynamically, e.g. Object.defineProperties(Chart, {register}));
@@ -1855,9 +1961,24 @@ class GraphBuilder:
             "dispatch": {"kind": kind, "table": table, "prefix": prefix, "expr": expr[:120]},
         })
 
+    _PROTO = (("call.proto_iter", "__iter__"), ("call.proto_getitem", "__getitem__"), ("call.proto_enter", "__enter__"),
+              ("call.proto_len", "__len__"))
+
     def handle_call(self, sm):
         if sm.get("call.dispatch") and not sm.get("call.func_name"):
             return self.handle_dispatch_call(sm)
+        for key, dunder in self._PROTO:
+            if sm.get(key) is not None:
+                recv = (sm.get(key) or "").strip()
+                if key == "call.proto_enter" and " as " in recv:
+                    recv = recv.split(" as ", 1)[0].strip()
+                # only receivers we could ever type: a name, self.field, or an instantiation
+                if not re.match(r"^(?:[A-Za-z_][\w.]*|[A-Za-z_][\w.]*\([^()]*\))$", recv):
+                    return
+                sm.captures["call.obj_name"] = recv
+                sm.captures["call.func_name"] = dunder
+                sm.captures["call.implicit"] = dunder
+                break
         # print("\nCALL MATCH")
         # print("start:", sm.start_byte)
         # print("end:", sm.end_byte)
@@ -2162,6 +2283,7 @@ class GraphBuilder:
             "caller_class": getattr(sm, "owner_class", None),
 
             "is_test": bool(getattr(sm, "is_test", False)),
+            **({"implicit": sm.get("call.implicit")} if sm.get("call.implicit") else {}),
         })
         # ==================================================
         # EXECUTION EDGE
@@ -2335,7 +2457,12 @@ class GraphBuilder:
             # classes registry knows X even when it has no methods.
             name = sm.get("contract.name")
             if name:
-                self.graph["classes"].setdefault(sm.file_path, {}).setdefault(name, {"superclass": None})
+                entry = self.graph["classes"].setdefault(sm.file_path, {}).setdefault(name, {"superclass": None})
+                sup = sm.get("contract.superclass")
+                if sup and not entry.get("superclass") and sup.strip() not in ("object", "metaclass"):
+                    # `class IndexVariable(Variable): pass` -- no methods, so handle_function_def
+                    # never records the base; method lookups must still walk to Variable
+                    entry["superclass"] = sup.strip().split("=")[-1].split(".")[-1].split("[")[0]
                 if not self.function_index.resolve_function(sm.file_path, name):
                     self.ensure_file("functions", sm.file_path)
                     metadata = {"name": name, "file": sm.file_path, "start_line": sm.start_point[0] + 1,

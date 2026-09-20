@@ -109,6 +109,9 @@ def classify_match(capture_names):
 
     if "call.dispatch" in capture_set:
         return "CALL"
+
+    if any(k.startswith("call.proto_") for k in capture_set):
+        return "CALL"
     
 
     # ======================================================

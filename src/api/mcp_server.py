@@ -175,6 +175,23 @@ def mcp_build_graph(repo_path: str, force_rebuild: bool = False, watch: bool = F
 
         SERVER_STATE["graph"] = graph
 
+        # Dynamic-trace layer: <cache_dir>/trace.json (recorded by dynamic_trace.trace_pytest)
+        # adds observed call edges on top of the static graph. Idempotent, so it runs after a
+        # (re)build, an incremental update, or whenever the trace file itself changed.
+        try:
+            from dynamic_trace.merge import load_trace, merge_trace, trace_path_for
+            tpath = trace_path_for(cache_dir)
+            if os.path.isfile(tpath):
+                stamp = (tpath, os.stat(tpath).st_mtime_ns)
+                if not loaded_from_cache or SERVER_STATE.get("trace_stamp") != stamp or "_trace" not in graph:
+                    with redirect_stdout_to_stderr():
+                        summary = merge_trace(graph, load_trace(tpath), repo_path)
+                    SERVER_STATE["trace_stamp"] = stamp
+                    print(f"Trace layer: +{summary['edges_added']} observed edges, {summary['static_edges_observed']} static edges confirmed, "
+                          f"{len(summary['stale_files'])} traced files changed since {summary.get('recorded_at')}", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 - a bad trace must never break the graph
+            print(f"Trace layer skipped: {e}", file=sys.stderr)
+
         # Start the background watcher if requested
         if watch:
             try:
@@ -765,7 +782,8 @@ def impact_completeness(graph, target_node, upstream, downstream, include_tests=
             else:
                 unresolved.append(entry)
     low = [{"from": e.get("from"), "to": e.get("to"), "confidence": _edge_confidence(e)}
-           for e in list(upstream) + list(downstream) if _edge_confidence(e) != "resolved"]
+           for e in list(upstream) + list(downstream) if _edge_confidence(e) not in ("resolved", "observed")]
+    traced = [e for e in list(upstream) + list(downstream) if e.get("source") == "trace" or e.get("observed")]
     out = {
         "verdict": "complete" if not unresolved else "partial",
         "unresolved_calls_to_name": len(unresolved),
@@ -774,6 +792,15 @@ def impact_completeness(graph, target_node, upstream, downstream, include_tests=
         "low_confidence_edges": len(low),
         "low_confidence_examples": low[:10],
     }
+    tinfo = graph.get("_trace")
+    if tinfo:
+        # how much of this answer rests on observed (dynamic) evidence, and how fresh it is
+        stale = {f for f in tinfo.get("stale_files") or []}
+        touched = {e.get("from", {}).get("file") for e in traced} | {e.get("to", {}).get("file") for e in traced}
+        out["trace"] = {"recorded_at": tinfo.get("recorded_at"), "edges_from_trace": len(traced),
+                        "stale": bool(touched & stale), "stale_files": sorted(touched & stale)[:10]}
+        if touched & stale:
+            out["trace"]["warning"] = "some traced files changed after the trace was recorded; observed edges through them may be outdated"
     if unresolved:
         out["note"] = (f"{len(unresolved)} call(s) named '{name}' could not be attributed to a definition; "
                        f"any of them may be a caller of this target. Confirm with mcp_find_symbols / search "

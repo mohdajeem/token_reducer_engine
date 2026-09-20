@@ -70,9 +70,12 @@ class GraphTraversal:
                         "depth": depth + 1
                     }
                     if edge.get("confidence"):
-                        edge_dict["confidence"] = edge["confidence"]  # name-unique / candidates
+                        edge_dict["confidence"] = edge["confidence"]  # name-unique / candidates / observed
                     if edge.get("is_test"):
                         edge_dict["is_test"] = True
+                    for k in ("source", "observed", "stale", "via"):
+                        if edge.get(k):
+                            edge_dict[k] = edge[k]  # dynamic-trace provenance survives traversal
                     if edge_dict not in results:
                         results.append(edge_dict)
                     queue.append((from_node, depth + 1))
@@ -128,9 +131,12 @@ class GraphTraversal:
                         "depth": depth + 1
                     }
                     if edge.get("confidence"):
-                        edge_dict["confidence"] = edge["confidence"]  # name-unique / candidates
+                        edge_dict["confidence"] = edge["confidence"]  # name-unique / candidates / observed
                     if edge.get("is_test"):
                         edge_dict["is_test"] = True
+                    for k in ("source", "observed", "stale", "via"):
+                        if edge.get(k):
+                            edge_dict[k] = edge[k]  # dynamic-trace provenance survives traversal
                     if edge_dict not in results:
                         results.append(edge_dict)
                     queue.append((to_node, depth + 1))

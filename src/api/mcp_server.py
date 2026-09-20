@@ -1058,6 +1058,67 @@ def mcp_neighbors(target: str, hops: int = 1, include_tests: bool = False, limit
         return {"target": node, "hops": depth, "neighbors": out[:limit]}
 
 
+def file_dependents(graph, rel, hops=2):
+    """Files that import `rel`, directly or through re-exporting packages / barrels, up to
+    `hops` import steps. -> {file: depth}."""
+    rel = rel.replace("\\", "/")
+    importers = {}
+    for f, imps in (graph.get("imports") or {}).items():
+        for imp in imps:
+            if imp.get("file"):
+                importers.setdefault(imp["file"], set()).add(f)
+    # a package __init__ / barrel that re-exports names from rel also "imports" it
+    for f, entry in (graph.get("reexports") or {}).items():
+        for src in (entry.get("star") or []):
+            if isinstance(src, str):
+                importers.setdefault(src, set()).add(f)
+        for _, v in (entry.get("names") or {}).items():
+            if isinstance(v, (list, tuple)) and v and isinstance(v[0], str):
+                importers.setdefault(v[0], set()).add(f)
+    out, frontier = {}, {rel}
+    for depth in range(1, max(1, hops) + 1):
+        nxt = set()
+        for f in frontier:
+            for g in importers.get(f, ()):
+                if g != rel and g not in out:
+                    out[g] = depth
+                    nxt.add(g)
+        frontier = nxt
+        if not frontier:
+            break
+    return out
+
+
+@mcp.tool()
+def mcp_file_dependents(file_path: str, hops: int = 2, limit: int = 50) -> dict:
+    """
+    Who depends on a FILE: the files that import it (directly, or through a package
+    __init__ / barrel that re-exports it), split into production and test files. The
+    blast radius for a change that is not inside any function -- a module-level
+    constant, a regex, a table, a default -- where call edges have nothing to say.
+
+    Args:
+        file_path: Repo-relative path of the changed file.
+        hops: Import steps to follow (1 = direct importers; 2 also their importers).
+    """
+    with SERVER_STATE["lock"]:
+        graph = SERVER_STATE.get("graph")
+        if not graph:
+            return {"error": "Graph is not built yet. Please call mcp_build_graph(repo_path) first."}
+        rel = file_path.replace("\\", "/")
+        known = any(rel in (graph.get(sec) or {}) for sec in ("functions", "imports", "calls", "literals")) or             any(imp.get("file") == rel for imps in (graph.get("imports") or {}).values() for imp in imps)
+        if not known:
+            return {"error": f"{rel} is not in the graph (unknown file, or not an indexed source file)."}
+        deps = file_dependents(graph, rel, hops=max(1, min(int(hops or 2), 4)))
+        test_files = {f for f, fns in (graph.get("functions") or {}).items() if any(isinstance(x, dict) and x.get("is_test") for x in fns)}
+        prod = sorted((f for f in deps if f not in test_files), key=lambda f: (deps[f], f))
+        tests = sorted((f for f in deps if f in test_files), key=lambda f: (deps[f], f))
+        return {"file": rel, "hops": hops,
+                "dependents": [{"file": f, "depth": deps[f]} for f in prod[:limit]],
+                "tests": [{"file": f, "depth": deps[f]} for f in tests[:limit]],
+                "total_dependents": len(prod), "total_tests": len(tests)}
+
+
 @mcp.tool()
 def mcp_tests_for(target: str, hops: int = 2, limit: int = 30) -> dict:
     """

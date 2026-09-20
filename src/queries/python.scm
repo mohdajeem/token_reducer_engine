@@ -212,6 +212,10 @@
 (return_statement
   (_) @return.value)
 
+; a fixture's `yield app` is its return value for typing purposes
+(yield
+  (_) @return.value)
+
 (class_definition
   name: (identifier) @contract.name)
 

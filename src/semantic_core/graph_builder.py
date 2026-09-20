@@ -322,6 +322,7 @@ class GraphBuilder:
             self.build_argument_parameter_flow()
             self.infer_parameter_types_from_flow()
             self.infer_types_from_returns()
+            self.infer_fixture_param_types()
             self.resolve_pending_calls()
             after = sum(1 for calls in self.graph["calls"].values() for c in calls if c.get("resolved_function"))
             if after == before:
@@ -880,6 +881,59 @@ class GraphBuilder:
                 n += 1
         return n
 
+    def infer_fixture_param_types(self):
+        """pytest injects fixtures by parameter NAME: `def test_x(app):` gets whatever the
+        fixture `app` returns/yields. Every sphinx/pytest/xarray test drives the code under
+        test through such a parameter, so without this the tests are dead ends in the graph.
+        A fixture's type is its inferred return type; the nearest definition wins (same
+        file, then a conftest.py up the tree, then a unique one anywhere)."""
+        ret = getattr(self, "_return_types", None) or {}
+        fixtures = {}  # name -> [(file, type)]
+        for f, fns in self.graph["functions"].items():
+            for fn in fns:
+                if isinstance(fn, dict) and fn.get("fixture"):
+                    t = ret.get((f, fn["name"]))
+                    if t:
+                        fixtures.setdefault(fn["name"], []).append((f, t))
+        if not fixtures:
+            return 0
+        import posixpath
+        n = 0
+        for f, entries in self.graph.get("parameters", {}).items():
+            if not f.endswith(".py"):
+                continue
+            for entry in entries:
+                fn = entry.get("function")
+                for param in entry.get("params") or []:
+                    if param not in fixtures or param in ("self", "cls"):
+                        continue
+                    if self.symbol_table.resolve_type(f, fn, param):
+                        continue
+                    cands = fixtures[param]
+                    same = [t for ff, t in cands if ff == f]
+                    if same:
+                        t = same[0]
+                    else:
+                        d = posixpath.dirname(f)
+                        conf = None
+                        while True:
+                            hit = [t for ff, t in cands if ff == posixpath.join(d, "conftest.py") or (not d and ff == "conftest.py")]
+                            if hit:
+                                conf = hit[0]
+                                break
+                            if not d:
+                                break
+                            d = posixpath.dirname(d)
+                        if conf:
+                            t = conf
+                        elif len({t for _, t in cands}) == 1:
+                            t = cands[0][1]
+                        else:
+                            continue
+                    self.symbol_table.register_type(f, fn, param, t)
+                    n += 1
+        return n
+
     def _return_type_of_call(self, file_path, caller, recv_expr):
         """Type of the value a call expression evaluates to: the class it instantiates, or
         the return type of the function it resolves to (same file + caller, matched by
@@ -1367,6 +1421,8 @@ class GraphBuilder:
             metadata["class"] = owner_class
         if sm.get("function.static"):
             metadata["static"] = True
+        if sm.get("function.fixture"):
+            metadata["fixture"] = True
         if getattr(sm, "is_test", False):
             metadata["is_test"] = True
 

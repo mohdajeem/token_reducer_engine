@@ -151,6 +151,22 @@ FIXTURE = {
         def test_boot():
             assert boot()
         """),
+    # pytest fixtures: `app` is injected by NAME; the fixture yields an Engine
+    "tests/conftest.py": textwrap.dedent("""\
+        import pytest
+        from pkg.core.engine import Engine
+        from pkg.core.parts import Gear
+
+
+        @pytest.fixture
+        def app():
+            engine = Engine(Gear())
+            yield engine
+        """),
+    "tests/test_fixture.py": textwrap.dedent("""\
+        def test_start(app):
+            app.start()
+        """),
 }
 
 fails = []
@@ -282,6 +298,13 @@ def main():
         srv.SERVER_STATE["graph"] = g2; srv.SERVER_STATE["repo_path"] = str(root)
         tests_for = srv.mcp_tests_for(target=f"FUNCTION:{E}:boot")
         check("mcp_tests_for(boot) names tests/test_engine.py::test_boot", any(t.get("file") == "tests/test_engine.py" for t in tests_for.get("tests", [])), tests_for)
+        cf = {f["name"]: f for f in fns(g2, "tests/conftest.py")}
+        check("@pytest.fixture def app() is flagged fixture", cf.get("app", {}).get("fixture") is True, cf.get("app"))
+        c = calls(g2, "tests/test_fixture.py").get(("app", "start"))
+        check("test_start(app): the fixture parameter is typed from the fixture's yield -> app.start() resolves to Engine.start",
+              c is not None and c.get("resolved_class") == "Engine", c)
+        tests_for = srv.mcp_tests_for(target=f"FUNCTION:{E}:Engine.start", hops=1)
+        check("mcp_tests_for(Engine.start) names tests/test_fixture.py::test_start", any(t.get("function") == "test_start" for t in tests_for.get("tests", [])), tests_for)
     finally:
         os.environ.pop("SEMANTIC_INDEX_TESTS", None)
 

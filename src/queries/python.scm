@@ -20,6 +20,11 @@
     name: (dotted_name) @import.name
     alias: (identifier) @import.alias))
 
+; `from x import *`: everything x defines (or re-exports) is visible here
+(import_from_statement
+  module_name: [(dotted_name) (relative_import)] @import.source
+  (wildcard_import) @import.star)
+
 ; Relative imports support
 (import_from_statement
   module_name: (relative_import) @import.source

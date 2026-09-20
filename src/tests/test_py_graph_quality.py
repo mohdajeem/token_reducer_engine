@@ -145,6 +145,60 @@ FIXTURE = {
             t = Table([1, 2])
             return t.cols
         """),
+    # a tiny ORM shaped like Django's: `Model.objects` is a Manager whose methods are really
+    # QuerySet's; QuerySet methods return clones (`self.__class__(...)`, `self._chain()`);
+    # the package re-exports everything with `from .query import *`
+    "src/orm/__init__.py": "from .query import *\nfrom .aggregates import *\n",
+    "src/orm/query.py": textwrap.dedent("""\
+        class QuerySet:
+            def __init__(self, model=None):
+                self.model = model
+
+            def _clone(self):
+                c = self.__class__(model=self.model)
+                return c
+
+            def _chain(self):
+                obj = self._clone()
+                return obj
+
+            def filter(self, **kw):
+                clone = self._chain()
+                return clone
+
+            def order_by(self, *fields):
+                return self._chain()
+
+            def values_list(self, *fields):
+                return list(fields)
+
+
+        class Manager:
+            pass
+
+
+        class Model:
+            objects = Manager()
+        """),
+    "src/orm/aggregates.py": textwrap.dedent("""\
+        class Count:
+            def __init__(self, expr):
+                self.expr = expr
+        """),
+    "src/app_models.py": textwrap.dedent("""\
+        from orm import Model, Count
+
+
+        class Book(Model):
+            pass
+
+
+        def newest_titles():
+            qs = Book.objects.filter(year=2020)
+            ordered = qs.order_by('-year')
+            n = Count('id')
+            return ordered.values_list('title')
+        """),
     "tests/test_engine.py": textwrap.dedent("""\
         from pkg import boot
 
@@ -279,6 +333,21 @@ def main():
           c is not None and c.get("resolved_file") == "src/pkg/table/table.py" and (c.get("resolved_function") or {}).get("kind") == "class", c)
     ia = srv.mcp_impact_analysis(target="FUNCTION:src/pkg/table/table.py:Table._convert", direction="UPSTREAM", max_depth=2)
     check("blast radius of Table._convert reaches make() through Table.__init__", any(n.get("function") == "make" for n in ia.get("upstream_nodes", [])), ia.get("upstream_nodes"))
+
+    # ---------- 3e. Django-shaped ORM chains, star re-exports, clone-returning methods
+    mc = calls(graph, "src/app_models.py")
+    c = mc.get(("Book.objects", "filter"))
+    check("Book.objects.filter() -> QuerySet.filter (manager methods are QuerySet's)", c is not None and c.get("resolved_class") == "QuerySet", c)
+    c = mc.get(("qs", "order_by"))
+    check("qs = Book.objects.filter(); qs.order_by() -> QuerySet.order_by (filter returns a clone typed via self._chain/self.__class__)",
+          c is not None and c.get("resolved_class") == "QuerySet", c)
+    c = mc.get(("ordered", "values_list"))
+    check("ordered = qs.order_by(); ordered.values_list() -> QuerySet.values_list", c is not None and c.get("resolved_class") == "QuerySet", c)
+    c = mc.get((None, "Count"))
+    check("Count(...) via `from orm import Count` where orm/__init__ does `from .aggregates import *` -> class node in aggregates.py",
+          c is not None and c.get("resolved_file") == "src/orm/aggregates.py" and (c.get("resolved_function") or {}).get("kind") == "class", c)
+    ia = srv.mcp_impact_analysis(target="FUNCTION:src/orm/query.py:QuerySet._clone", direction="UPSTREAM", max_depth=4)
+    check("blast radius of QuerySet._clone reaches newest_titles() through _chain/filter", any(n.get("function") == "newest_titles" for n in ia.get("upstream_nodes", [])), [n.get("function") for n in ia.get("upstream_nodes", [])])
 
     # ---------- 4. external
     c = ac.get(("json", "dumps"))

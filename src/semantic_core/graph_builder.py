@@ -316,8 +316,9 @@ class GraphBuilder:
         # build. Rounds after the first only cost the flow/inference passes (no re-parse).
         # variable states first: return-type inference reads `v = f()` assignments from them
         self.track_variable_states()
-        for _round in range(4):
+        for _round in range(6):
             before = sum(1 for calls in self.graph["calls"].values() for c in calls if c.get("resolved_function"))
+            n_types = sum(len(v) for scopes in self.symbol_table.types.values() for v in scopes.values())
             self.graph["data_flow"] = []
             self.build_argument_parameter_flow()
             self.infer_parameter_types_from_flow()
@@ -325,8 +326,11 @@ class GraphBuilder:
             self.infer_fixture_param_types()
             self.resolve_pending_calls()
             after = sum(1 for calls in self.graph["calls"].values() for c in calls if c.get("resolved_function"))
-            if after == before:
+            n_types2 = sum(len(v) for scopes in self.symbol_table.types.values() for v in scopes.values())
+            n_ret = len(getattr(self, "_return_types", None) or {})
+            if after == before and n_types2 == n_types and n_ret == getattr(self, "_n_ret_prev", -1):
                 break
+            self._n_ret_prev = n_ret
 
         # ======================================================
         # DETECT TAINT SOURCES
@@ -600,6 +604,17 @@ class GraphBuilder:
             sm.file_path
         )
 
+        if sm.get("import.star"):
+            src_file = self.symbol_table.register_star_import(sm.file_path, sm.get("import.source"))
+            self.graph["imports"][sm.file_path].append({"source": sm.get("import.source"), "name": "*", "alias": None,
+                                                        "file": src_file})
+            if src_file and sm.file_path.endswith("__init__.py"):
+                # a package that star-imports a module re-exports everything it defines
+                entry = self.graph["reexports"].setdefault(sm.file_path, {"star": [], "names": {}})
+                if src_file not in entry["star"]:
+                    entry["star"].append(src_file)
+            return
+
         resolved_file = self.symbol_table.register_import(
             file_path=sm.file_path,
             import_name=(
@@ -848,11 +863,20 @@ class GraphBuilder:
             if not fn or not val:
                 continue
             t = SymbolResolver.extract_instantiated_class(val)
-            if not t and val in ("self", "this"):
-                cs = owner_class.get((f, fn)) or set()
-                t = next(iter(cs)) if len(cs) == 1 else None
+            cs = owner_class.get((f, fn)) or set()
+            own = next(iter(cs)) if len(cs) == 1 else None
+            if not t and (val in ("self", "this") or _re.match(r"^(?:self\.__class__|type\(self\)|cls)\s*\(", val)):
+                # `return self` (fluent APIs), `return self.__class__(...)` / `type(self)(...)`
+                # (QuerySet._clone), `return cls(...)` (classmethod constructors)
+                t = own
             if not t and _re.match(r"^[A-Za-z_$][\w$]*$", val):
                 t = self.symbol_table.resolve_type(f, fn, val)
+            if not t:
+                m = _re.match(r"^(?:self|this)\.([A-Za-z_$][\w$]*)\s*\(", val)
+                if m and own:
+                    # `return self._chain()`: the sibling method's return type (previous round)
+                    prev = getattr(self, "_return_types", None) or {}
+                    t = prev.get((f, m.group(1)))
             if t:
                 ret.setdefault((f, fn), set()).add(t)
         ret = {k: next(iter(v)) for k, v in ret.items() if len(v) == 1}
@@ -934,6 +958,15 @@ class GraphBuilder:
                     n += 1
         return n
 
+    def _orm_queryset_class(self, file_path):
+        """"QuerySet" when the project defines exactly one class of that name (Django itself,
+        or an app vendoring the ORM); None otherwise so nothing is guessed elsewhere."""
+        cache = getattr(self, "_qs_cache", None)
+        if cache is None:
+            owners = [(f, c) for f, cs in self.graph["classes"].items() for c in cs if c == "QuerySet"]
+            cache = self._qs_cache = "QuerySet" if len(owners) == 1 else None
+        return cache
+
     def _return_type_of_call(self, file_path, caller, recv_expr):
         """Type of the value a call expression evaluates to: the class it instantiates, or
         the return type of the function it resolves to (same file + caller, matched by
@@ -1001,6 +1034,14 @@ class GraphBuilder:
                     # `session().get()` / `self.factory().run()`: the receiver is a call whose
                     # return type infer_types_from_returns learned
                     t = self._return_type_of_call(file_path, caller, recv)
+                    if t:
+                        typed_file, typed_meta = self.resolve_method(file_path, t, func)
+                        typed_class, how = t, "typed"
+                if not typed_meta and recv.endswith(".objects") and recv.count(".") == 1:
+                    # Django: `Model.objects.filter(...)`. The manager's methods are
+                    # QuerySet's (Manager.from_queryset builds them at import time), so a
+                    # static graph must treat `objects` as a QuerySet.
+                    t = self._orm_queryset_class(file_path)
                     if t:
                         typed_file, typed_meta = self.resolve_method(file_path, t, func)
                         typed_class, how = t, "typed"
@@ -1715,6 +1756,16 @@ class GraphBuilder:
                     f2, m2, orig = self.resolve_through_reexports(resolved_file, imported_as)
                     if m2:
                         resolved_file, resolved_function, target_name = f2, m2, orig
+
+        # ==============================================
+        # FALLBACK 2b — `from x import *`
+        # ==============================================
+        if not resolved_function and not obj:
+            for src in self.symbol_table.star_imports.get(sm.file_path, []):
+                f2, m2, orig = self.resolve_through_reexports(src, func)
+                if m2:
+                    resolved_file, resolved_function, target_name = f2, m2, orig
+                    break
 
         # ==============================================
         # FALLBACK 3 — LOCAL DEFINITION

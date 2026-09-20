@@ -38,6 +38,8 @@ class SymbolTable:
         # file -> {local name -> exported name}: `import { helper as h }` records h -> helper,
         # so a call to h() can be looked up under the name the source module exports.
         self.imported_names = {}
+        # file -> [resolved source files] for `from x import *`
+        self.star_imports = {}
 
 
     @property
@@ -80,16 +82,28 @@ class SymbolTable:
 
     def forget_file(self, file_path):
         file_path = os.path.normpath(str(file_path)).replace("\\", "/")
-        for table in (self.imports, self.aliases, self.destructured, self.types, self.imported_names):
+        for table in (self.imports, self.aliases, self.destructured, self.types, self.imported_names, self.star_imports):
             table.pop(file_path, None)
 
     def to_state(self):
         return {"imports": self.imports, "aliases": self.aliases, "destructured": self.destructured,
-                "types": self.types, "imported_names": self.imported_names}
+                "types": self.types, "imported_names": self.imported_names, "star_imports": self.star_imports}
 
     def load_state(self, state):
-        for key in ("imports", "aliases", "destructured", "types", "imported_names"):
+        for key in ("imports", "aliases", "destructured", "types", "imported_names", "star_imports"):
             setattr(self, key, dict(state.get(key) or {}))
+
+    def register_star_import(self, file_path, import_source):
+        """`from x import *` -> remember x's file so bare names can be looked up there."""
+        file_path = os.path.normpath(str(file_path)).replace("\\", "/")
+        if not file_path.endswith(".py"):
+            return None
+        resolved = self.resolve_python_module(file_path, import_source)
+        if resolved:
+            lst = self.star_imports.setdefault(file_path, [])
+            if resolved not in lst:
+                lst.append(resolved)
+        return resolved
 
     _PY_ROOTS_CACHE = {}
 

@@ -40,6 +40,9 @@ class SymbolTable:
         self.imported_names = {}
         # file -> [resolved source files] for `from x import *`
         self.star_imports = {}
+        # file -> {scope: enclosing scope}: a closure sees the variables of the function it
+        # is defined in (`let injector: Injector` in a describe() callback, used inside it())
+        self.scope_parents = {}
 
 
     @property
@@ -65,8 +68,13 @@ class SymbolTable:
         base_dir = os.path.dirname(file_path if os.path.isabs(file_path) or not project_root else os.path.join(project_root, file_path))
         target = os.path.normpath(os.path.join(base_dir, import_source)).replace("\\", "/")
         candidates = []
-        if os.path.splitext(target)[1] in self._JS_EXTS:
+        stem, ext0 = os.path.splitext(target)
+        if ext0 in self._JS_EXTS:
             candidates.append(target)
+            # TS under NodeNext/ESM imports the EMITTED name: `from './container.js'` while
+            # the source is container.ts (every import in nestjs/nest); .mjs/.cjs -> .mts/.cts
+            swap = {".js": (".ts", ".tsx"), ".jsx": (".tsx",), ".mjs": (".mts",), ".cjs": (".cts",)}.get(ext0, ())
+            candidates += [stem + e for e in swap]
         candidates += [target + ext for ext in self._JS_EXTS]
         candidates += [os.path.join(target, "index" + ext).replace("\\", "/") for ext in self._JS_EXTS]
         for cand in candidates:
@@ -82,16 +90,23 @@ class SymbolTable:
 
     def forget_file(self, file_path):
         file_path = os.path.normpath(str(file_path)).replace("\\", "/")
-        for table in (self.imports, self.aliases, self.destructured, self.types, self.imported_names, self.star_imports):
+        for table in (self.imports, self.aliases, self.destructured, self.types, self.imported_names, self.star_imports,
+                      self.scope_parents):
             table.pop(file_path, None)
 
     def to_state(self):
         return {"imports": self.imports, "aliases": self.aliases, "destructured": self.destructured,
-                "types": self.types, "imported_names": self.imported_names, "star_imports": self.star_imports}
+                "types": self.types, "imported_names": self.imported_names, "star_imports": self.star_imports,
+                "scope_parents": self.scope_parents}
 
     def load_state(self, state):
-        for key in ("imports", "aliases", "destructured", "types", "imported_names", "star_imports"):
+        for key in ("imports", "aliases", "destructured", "types", "imported_names", "star_imports", "scope_parents"):
             setattr(self, key, dict(state.get(key) or {}))
+
+    def register_scope_parent(self, file_path, scope_id, parent_scope):
+        file_path = os.path.normpath(str(file_path)).replace("\\", "/")
+        if scope_id and parent_scope and scope_id != parent_scope:
+            self.scope_parents.setdefault(file_path, {})[scope_id] = parent_scope
 
     def register_star_import(self, file_path, import_source):
         """`from x import *` -> remember x's file so bare names can be looked up there."""
@@ -468,9 +483,17 @@ class SymbolTable:
         if file_path not in self.types:
             return None
         
-        # Check in local scope
-        if scope_id in self.types[file_path] and variable_name in self.types[file_path][scope_id]:
-            return self.types[file_path][scope_id][variable_name]
+        # Check in local scope, then the enclosing scopes (a closure sees the variables of
+        # the function it is defined in: `let injector: Injector` in a describe() callback,
+        # used inside it())
+        scopes = self.types[file_path]
+        parents = self.scope_parents.get(file_path) or {}
+        seen = set()
+        while scope_id and scope_id not in seen and len(seen) < 12:
+            seen.add(scope_id)
+            if scope_id in scopes and variable_name in scopes[scope_id]:
+                return scopes[scope_id][variable_name]
+            scope_id = parents.get(scope_id)
             
         # Fallback to GLOBAL scope
         if "GLOBAL" in self.types[file_path] and variable_name in self.types[file_path]["GLOBAL"]:

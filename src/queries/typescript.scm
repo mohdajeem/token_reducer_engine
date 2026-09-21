@@ -303,6 +303,21 @@
   (class_heritage)? @class.heritage
 ) @class.node
 
+; `interface Container { getModules(): Map<..> }` -- a class node flagged interface; its
+; method signatures are FUNCTION_DEFs owned by it so `implements` dispatch has a target.
+; (`abstract class` is abstract_class_declaration, already a class node.)
+(interface_declaration
+  name: (type_identifier) @class.name
+) @class.node
+
+(method_signature
+  name: (property_identifier) @function.name
+) @function.node
+
+(abstract_method_signature
+  name: (property_identifier) @function.name
+) @function.node
+
 ; =============================================================================
 ; 7. VARIABLES, ALIASES & DESTRUCTURING
 ; =============================================================================
@@ -310,6 +325,23 @@
 (variable_declarator
   name: (identifier) @assign.variable
   value: (_) @assign.value
+)
+
+
+; Class fields: `private logger: LoggerService = new Logger()`, `readonly modules = new Map()`,
+; `private container: NestContainer;` -- the declared type, else the `new X()` value, types
+; every `this.logger.x()` in the class (the extractor fills field.type)
+(public_field_definition
+  name: (property_identifier) @field.variable
+  type: (type_annotation)? @assign.type_ann
+  value: (_)? @assign.value
+) @field.node
+
+; `let injector: Injector;` / `const w: InstanceWrapper = make()` -- the DECLARED type
+; types the variable whatever the value is (the extractor reads the annotation)
+(variable_declarator
+  name: (identifier) @assign.variable
+  type: (type_annotation) @assign.type_ann
 )
 
 (variable_declarator

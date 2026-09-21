@@ -383,3 +383,9 @@
 (jsx_opening_element name: (identifier) @jsx.component)
 (jsx_self_closing_element name: (identifier) @jsx.component)
 (jsx_attribute (property_identifier) @jsx.prop_name)
+
+; Class fields `logger = new Logger()`: the `new X()` value types every `this.logger.x()`
+(field_definition
+  property: (property_identifier) @field.variable
+  value: (_)? @assign.value
+) @field.node

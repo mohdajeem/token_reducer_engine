@@ -20,8 +20,8 @@ from utils.logger import logger
 
 
 _CLASS_NODE_TYPES = {"class_declaration", "class", "class_expression", "abstract_class_declaration",
-                     "interface_declaration", "enum_declaration", "record_declaration"}  # Java kinds too
-_CLASS_BODY_TYPES = {"class_body", "interface_body", "enum_body"}
+                     "interface_declaration", "enum_declaration", "record_declaration"}  # Java / TS kinds too
+_CLASS_BODY_TYPES = {"class_body", "interface_body", "enum_body", "object_type"}  # object_type: TS interface body
 _NOT_A_CLASS = {"module", "exports", "window", "global", "globalThis", "self", "this", "document", "process", "console"}
 
 
@@ -113,6 +113,53 @@ def _java_annotations(node):
     return out
 
 
+def _ts_interfaces_of(class_node):
+    """TS `class X implements A, B` / `interface X extends A, B` -> ["A", "B"]."""
+    out = []
+    for ch in class_node.children:
+        if ch.type == "class_heritage":
+            for sub in ch.named_children:
+                if sub.type == "implements_clause":
+                    for leaf in sub.named_children:
+                        if leaf.type == "type_identifier":
+                            out.append(_text(leaf))
+                        elif leaf.type == "generic_type":
+                            base = leaf.child_by_field_name("name") or (leaf.named_children[0] if leaf.named_children else None)
+                            if base is not None:
+                                out.append(_text(base))
+        elif ch.type == "extends_type_clause":  # interface X extends A
+            for leaf in ch.named_children:
+                if leaf.type == "type_identifier":
+                    out.append(_text(leaf))
+                elif leaf.type == "generic_type":
+                    base = leaf.child_by_field_name("name") or (leaf.named_children[0] if leaf.named_children else None)
+                    if base is not None:
+                        out.append(_text(base))
+    return out
+
+
+def _ts_type_name(ann):
+    """`: Injector` / `: Map<string, X>` / `: Injector | null` -> the class-like base name;
+    None for primitives, unions of several classes, functions, literals."""
+    if ann is None:
+        return None
+    nodes = [n for n in ann.named_children] if ann.type == "type_annotation" else [ann]
+    names = set()
+    stack = list(nodes)
+    while stack:
+        t = stack.pop()
+        if t.type == "type_identifier":
+            if _text(t).lower() not in _PRIMITIVES:
+                names.add(_text(t))
+        elif t.type == "generic_type":
+            base = t.child_by_field_name("name") or (t.named_children[0] if t.named_children else None)
+            if base is not None and _text(base).lower() not in _PRIMITIVES:
+                names.add(_text(base))
+        elif t.type in ("union_type", "parenthesized_type", "nested_type_identifier"):
+            stack.extend(c for c in t.named_children if c.type not in ("literal_type", "predefined_type", "undefined", "null"))
+    return next(iter(names)) if len(names) == 1 else None
+
+
 def _superclass_of(class_node):
     for ch in class_node.children:
         if ch.type == "superclass":
@@ -126,11 +173,17 @@ def _superclass_of(class_node):
             for sub in ch.children:
                 if sub.type in ("identifier", "member_expression", "type_identifier"):
                     return _text(sub)
-            # TS: `extends X` sits inside an extends_clause
+            # TS: `extends X` sits inside an extends_clause; `implements Y` is NOT a superclass
             for sub in ch.named_children:
+                if sub.type == "implements_clause":
+                    continue
                 for leaf in (sub.named_children or [sub]):
                     if leaf.type in ("identifier", "member_expression", "type_identifier"):
                         return _text(leaf)
+                    if leaf.type == "generic_type":
+                        base = leaf.child_by_field_name("name") or (leaf.named_children[0] if leaf.named_children else None)
+                        if base is not None:
+                            return _text(base)
     return None
 
 
@@ -477,6 +530,24 @@ def _first_new_expression(node, depth=0):
     return None
 
 
+def _ts_parameter_properties(func_node, param_types):
+    """TS `constructor(private readonly container: Container, public x: X)`: each parameter
+    with an accessibility modifier / readonly IS a field of that type (nestjs DI everywhere)."""
+    out = {}
+    params = func_node.child_by_field_name("parameters")
+    if params is None or params.type != "formal_parameters":
+        return out
+    for prm in params.named_children:
+        if prm.type not in ("required_parameter", "optional_parameter"):
+            continue
+        if not any(c.type in ("accessibility_modifier", "readonly", "override_modifier") for c in prm.children):
+            continue
+        pat = prm.child_by_field_name("pattern")
+        if pat is not None and pat.type == "identifier" and _text(pat) in param_types:
+            out[_text(pat)] = param_types[_text(pat)]
+    return out
+
+
 def _this_field_assignments(func_node, param_types):
     """`this.x = new Y()` -> {"x": "Y"}; `this.x = param` -> param's declared type, if any."""
     out = {}
@@ -791,6 +862,20 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                         par = par.parent
                         hops += 1
 
+                if match_type == "VARIABLE_ASSIGNMENT" and match_dict.get("assign.type_ann") is not None:
+                    ann = match_dict.get("assign.type_ann")
+                    ann = ann[0] if isinstance(ann, list) else ann
+                    t = _ts_type_name(ann)
+                    capture_dict.pop("assign.type_ann", None)
+                    if t:
+                        capture_dict["field.type" if capture_dict.get("field.variable") else "assign.type"] = t
+                if match_type == "VARIABLE_ASSIGNMENT" and capture_dict.get("field.variable") and not capture_dict.get("field.type"):
+                    vnode = match_dict.get("assign.value")
+                    vnode = vnode[0] if isinstance(vnode, list) else vnode
+                    ctor = _first_new_expression(vnode) if vnode is not None else None
+                    if ctor:
+                        capture_dict["field.type"] = ctor  # `logger = new Logger()`
+
                 if match_type == "FUNCTION_DEF":
                     # a def nested in another def (a factory's inner function, a fixture that
                     # yields a closure): remember the parent so return typing can see through it
@@ -815,6 +900,7 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                         if sup:
                             capture_dict["class.superclass"] = sup.split(".")[-1]
                         ifaces = _java_interfaces_of(cnode) if cnode.type in ("class_declaration", "interface_declaration", "enum_declaration", "record_declaration") else []
+                        ifaces = ifaces or _ts_interfaces_of(cnode)
                         if ifaces:
                             capture_dict["class.interfaces"] = ifaces
                         if cnode.type == "interface_declaration":
@@ -846,6 +932,8 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                         capture_dict["function.name"], cls, sup = dp[0], dp[1], None
                         if dp[2]:
                             capture_dict["function.static"] = True
+                    if fnode is not None and fnode.type in ("method_signature", "abstract_method_signature") and not cls:
+                        continue  # a signature in a type literal, not a definition
                     if cls:
                         capture_dict["function.class"] = cls
                     if sup:
@@ -889,6 +977,7 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                             capture_dict["function.param_types"] = ptypes
                         if cls:
                             ftypes = _this_field_assignments(fnode, ptypes)
+                            ftypes.update(_ts_parameter_properties(fnode, ptypes))
                             if ftypes:
                                 capture_dict["function.field_types"] = ftypes
 

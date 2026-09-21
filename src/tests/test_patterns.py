@@ -27,6 +27,9 @@ A pattern that passes here is also asserted in the permanent suites so it cannot
   py-override-dispatch / js-override-dispatch  the caller holds the BASE type and calls
                   `ops.quote()` / `element.draw()`; the override in a subclass must be reached.
 
+  ts-nest-di      nestjs: `.js` imports of `.ts` files, constructor parameter properties,
+                  `implements` + interface dispatch, typed locals, vitest/builtin globals.
+
 Run:  python tests/test_patterns.py [pattern ...]
 """
 import contextlib
@@ -1293,6 +1296,103 @@ pattern("js-override-dispatch", {
 }, [
     ("FUNCTION:src/arc.js:ArcElement.draw", "draws the arc", 4),
     ("FUNCTION:src/point.js:PointElement.draw", "draws the arc", 4),
+])
+
+
+# --------------------------------------------------------------------------- ts-nest-di
+# nestjs/nest packages/core (23% of calls resolved): ESM-style imports name `.js` files that
+# exist as `.ts` (`from '../injector/container.js'`); constructor PARAMETER PROPERTIES
+# (`constructor(private readonly container: NestContainer)`) declare the fields that every
+# `this.container.x()` goes through; `class X implements Y` / `interface Y` never captured;
+# typed locals `const w: InstanceWrapper = make()`; vitest globals (`vi.spyOn`, `expect(..)
+# .toBe`) and JS builtins (`Object.create`, `Reflect.getMetadata`) left "unresolved".
+pattern("ts-nest-di", {
+    "package.json": '{"name": "pat", "type": "module"}',
+    "tsconfig.json": '{"compilerOptions": {"module": "NodeNext"}}',
+    "src/injector/instance-wrapper.ts": textwrap.dedent("""\
+        export class InstanceWrapper {
+          private readonly isTreeStatic: boolean = true;
+          public isDependencyTreeStatic(): boolean {
+            return this.isTreeStatic;
+          }
+        }
+        """),
+    "src/injector/container.ts": textwrap.dedent("""\
+        import { InstanceWrapper } from './instance-wrapper.js';
+
+        export interface Container {
+          getModules(): Map<string, InstanceWrapper>;
+        }
+
+        export class NestContainer implements Container {
+          private readonly modules = new Map<string, InstanceWrapper>();
+          public getModules(): Map<string, InstanceWrapper> {
+            return this.modules;
+          }
+        }
+
+        export class TestingContainer implements Container {
+          public getModules(): Map<string, InstanceWrapper> {
+            return new Map();
+          }
+        }
+        """),
+    "src/injector/injector.ts": textwrap.dedent("""\
+        import { Container } from './container.js';
+        import { InstanceWrapper } from './instance-wrapper.js';
+
+        export class Injector {
+          constructor(private readonly container: Container) {}
+
+          public loadInstance(wrapper: InstanceWrapper): number {
+            const modules = this.container.getModules();
+            if (wrapper.isDependencyTreeStatic()) {
+              return modules.size;
+            }
+            return -1;
+          }
+        }
+        """),
+    "src/legacy.ts": textwrap.dedent("""\
+        export class Legacy {
+          public getModules(): string[] { return []; }
+          public isDependencyTreeStatic(): boolean { return false; }
+          public loadInstance(wrapper: unknown): number { return 0; }
+        }
+        """),
+    "test/injector/injector.spec.ts": textwrap.dedent("""\
+        import { Injector } from '../../src/injector/injector.js';
+        import { NestContainer } from '../../src/injector/container.js';
+        import { InstanceWrapper } from '../../src/injector/instance-wrapper.js';
+
+        function makeWrapper(): InstanceWrapper {
+          return new InstanceWrapper();
+        }
+
+        describe('Injector', () => {
+          let injector: Injector;
+          let container: NestContainer;
+
+          beforeEach(() => {
+            container = new NestContainer();
+            injector = new Injector(container);
+          });
+
+          describe('loadInstance', () => {
+            it('loads the instance', () => {
+              const wrapper: InstanceWrapper = makeWrapper();
+              vi.spyOn(container, 'getModules');
+              expect(injector.loadInstance(wrapper)).toBe(0);
+              expect(Object.create(null)).toBeDefined();
+            });
+          });
+        });
+        """),
+}, [
+    ("FUNCTION:src/injector/instance-wrapper.ts:InstanceWrapper.isDependencyTreeStatic", "loads the instance", 4),
+    ("FUNCTION:src/injector/container.ts:NestContainer.getModules", "loads the instance", 4),
+    ("FUNCTION:src/injector/container.ts:TestingContainer.getModules", "loads the instance", 4),
+    ("FUNCTION:src/injector/injector.ts:Injector.loadInstance", "loads the instance", 2),
 ])
 
 

@@ -1380,6 +1380,13 @@ class GraphBuilder:
                                      "candidates": [{"file": cf, "function": m["name"]} for cf, m in cands]})
         return n
 
+    _JS_GLOBAL_NAMES = frozenset({"Object", "Array", "Promise", "Reflect", "JSON", "Math", "Number", "String", "Boolean",
+                                  "Symbol", "Date", "Map", "Set", "WeakMap", "WeakSet", "Error", "TypeError", "RangeError",
+                                  "RegExp", "Function", "Proxy", "BigInt", "Intl", "console", "process", "globalThis",
+                                  "window", "document", "navigator", "Buffer", "Atomics", "ArrayBuffer", "Uint8Array",
+                                  # test runners' globals (vitest / jest / jasmine / mocha / cypress / sinon)
+                                  "vi", "jest", "jasmine", "expect", "cy", "sinon", "chai", "assert"})
+
     _JAVA_LANG_NAMES = frozenset({"String", "Integer", "Long", "Short", "Byte", "Double", "Float", "Boolean", "Character",
                                   "Math", "Objects", "System", "Thread", "StringBuilder", "StringBuffer", "Object",
                                   "Class", "Enum", "Exception", "RuntimeException", "Throwable", "Runtime", "Iterable"})
@@ -1765,10 +1772,20 @@ class GraphBuilder:
                     continue
                 alias = imp.get("alias") or imp.get("name") or (src.split(".")[0] if src and not src.startswith(".") else None)
                 if alias and src and imp.get("file") is None:
-                    external[alias] = src.split("/")[0]
+                    # package name: `lodash/fp` -> lodash, scoped `@nestjs/common/x` -> @nestjs/common
+                    parts = src.split("/")
+                    external[alias] = "/".join(parts[:2]) if src.startswith("@") and len(parts) > 1 else parts[0]
             if is_java:
                 for n in self._JAVA_LANG_NAMES:
                     external.setdefault(n, "java.lang")
+            is_js = file_path.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"))
+            if is_js:
+                # `Object.create(..)`, `Promise.resolve(..)`, `vi.spyOn(..)`, `expect(x).toBe(..)`:
+                # a global the project never defines is a builtin, not an unresolved call
+                for n in self._JS_GLOBAL_NAMES:
+                    if n not in external and not self.function_index.resolve_function(file_path, n) \
+                            and not self.resolve_class_file(file_path, n):
+                        external[n] = "builtin"
             for call in calls:
                 if call.get("resolved_function"):
                     continue
@@ -1798,7 +1815,7 @@ class GraphBuilder:
                     call["external"] = external[root]
                     continue
                 caller = call.get("caller_function") or "GLOBAL"
-                if is_java and "(" not in recv:
+                if (is_java or is_js) and "(" not in recv:
                     # a variable whose DECLARED type is a library class (`List<Owner> results`
                     # -> results.isEmpty(), `MockMvc mockMvc` -> mockMvc.perform(..)): the
                     # call is in the library, say so
@@ -1808,14 +1825,17 @@ class GraphBuilder:
                     if rt and rt in external and not self.resolve_class_file(file_path, rt):
                         call["external"] = external[rt]
                         continue
-                elif is_java:
+                elif is_java or is_js:
                     # a chain that STARTS outside the project stays outside: `status().isOk()`,
                     # `get("/x").param(..)`, `mockMvc.perform(..).andExpect(..)`
                     head = re.match(r"^([A-Za-z_$][\w$]*)\s*(\(|\.)", recv)
                     root0 = head.group(1) if head else None
                     label = None
-                    if root0 and head.group(2) == "(" and not self.function_index.resolve_function(file_path, root0)                             and not self.resolve_class_file(file_path, root0):
+                    if root0 and head.group(2) == "(" and not self.function_index.resolve_function(file_path, root0) \
+                            and not self.resolve_class_file(file_path, root0):
                         label = external.get(root0) or (star_external[0] if len(star_external) == 1 else ("static-import" if star_external else None))
+                        if not label and is_js and root0 in self.builtin_function_names():
+                            label = "builtin"  # `expect(x).toBe(..)` / `require('x').y()`
                     elif root0 and head.group(2) == ".":
                         rt = self.symbol_table.resolve_type(file_path, caller, root0)
                         if rt and rt in external and not self.resolve_class_file(file_path, rt):
@@ -2291,6 +2311,7 @@ class GraphBuilder:
             metadata["fixture"] = sm.get("function.fixture")  # True, or the injected name
         if sm.get("function.parent"):
             metadata["parent"] = sm.get("function.parent")  # enclosing def of a nested def
+            self.symbol_table.register_scope_parent(sm.file_path, function_name, sm.get("function.parent"))
         if sm.get("function.return_type"):
             metadata["return_type"] = sm.get("function.return_type")  # annotation or docstring
         if getattr(sm, "is_test", False) or sm.get("function.is_test"):

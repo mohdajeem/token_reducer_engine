@@ -30,6 +30,9 @@ A pattern that passes here is also asserted in the permanent suites so it cannot
   ts-nest-di      nestjs: `.js` imports of `.ts` files, constructor parameter properties,
                   `implements` + interface dispatch, typed locals, vitest/builtin globals.
 
+  py-class-attribute  django validators: the fix edits a class ATTRIBUTE (`regex = ...`) that a
+                  base-class method reads as `self.regex` and a subclass overrides.
+
 Run:  python tests/test_patterns.py [pattern ...]
 """
 import contextlib
@@ -1393,6 +1396,68 @@ pattern("ts-nest-di", {
     ("FUNCTION:src/injector/container.ts:NestContainer.getModules", "loads the instance", 4),
     ("FUNCTION:src/injector/container.ts:TestingContainer.getModules", "loads the instance", 4),
     ("FUNCTION:src/injector/injector.ts:Injector.loadInstance", "loads the instance", 2),
+])
+
+
+# --------------------------------------------------------------------------- py-class-attribute
+# django/core/validators.py (10097): the gold fix edits `regex = _lazy_re_compile(...)` -- a
+# CLASS ATTRIBUTE, not a function body. The base class's __call__ reads it as `self.regex`,
+# and the subclass overrides it. With only function->function edges there is nothing to hang
+# the chain on, so "change this regex -> which tests?" answered nothing at all.
+# Also covers the Java/TS shape of the same thing (a configured constant on a class).
+pattern("py-class-attribute", {
+    "pyproject.toml": "[project]\nname = 'pat'\n",
+    "src/pat/__init__.py": "",
+    "src/pat/validators.py": textwrap.dedent('''\
+        import re
+
+
+        class RegexValidator:
+            regex = ""
+            message = "invalid value"
+
+            def __call__(self, value):
+                if not re.search(self.regex, value):
+                    raise ValueError(self.message)
+                return value
+
+
+        class URLValidator(RegexValidator):
+            regex = r"^(?:[a-z]+)://(?:\\S+(?::\\S*)?@)?\\w+"
+            message = "enter a valid url"
+
+            def __call__(self, value):
+                scheme = value.split("://")[0]
+                if scheme not in self.schemes():
+                    raise ValueError(self.message)
+                return super().__call__(value)
+
+            def schemes(self):
+                return ALLOWED_SCHEMES
+
+
+        class EmailValidator(RegexValidator):
+            regex = r"^\\w+@\\w+"
+
+
+        ALLOWED_SCHEMES = ["http", "https"]
+        '''),
+    "tests/test_validators.py": textwrap.dedent('''\
+        from pat.validators import URLValidator
+
+
+        def test_url_with_user_info():
+            v = URLValidator()
+            assert v("https://user:pass@example") == "https://user:pass@example"
+        '''),
+}, [
+    # the changed attribute itself reaches the test, through the method that reads self.regex
+    ("FUNCTION:src/pat/validators.py:URLValidator.regex", "test_url_with_user_info", 4),
+    ("FUNCTION:src/pat/validators.py:URLValidator.message", "test_url_with_user_info", 4),
+    # the base class's attribute is read by the same method
+    ("FUNCTION:src/pat/validators.py:RegexValidator.regex", "test_url_with_user_info", 4),
+    # a module-level constant read by a method (the existing rule, kept working)
+    ("FUNCTION:src/pat/validators.py:ALLOWED_SCHEMES", "test_url_with_user_info", 4),
 ])
 
 

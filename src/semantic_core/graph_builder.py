@@ -337,6 +337,7 @@ class GraphBuilder:
             self._n_ret_prev = n_ret
         self.link_nested_functions()
         self.link_constant_uses()
+        self.link_attribute_uses()
         self.link_implementations()
         self.link_java_routes()
 
@@ -1535,6 +1536,110 @@ class GraphBuilder:
                 n += 1
         return n
 
+    _SELF_ATTR_RE = re.compile(r"(?<![\w.])(?:self|this|cls)\.([A-Za-z_]\w*)")
+    _QUAL_ATTR_RE = re.compile(r"(?<![\w.])([A-Z][\w]*)\.([A-Za-z_]\w*)")
+
+    def link_attribute_uses(self):
+        """Edge method -> class attribute for every `self.<attr>` / `cls.<attr>` a method
+        reads, and `<Class>.<attr>` written out in full. The attribute resolves the way
+        Python does -- this class, then its superclasses -- and because a subclass may
+        OVERRIDE it (django: RegexValidator.__call__ reads self.regex, URLValidator.regex
+        overrides it), the subclasses' own definitions are linked too. confidence="uses".
+
+        Each body is scanned ONCE and the names found are looked up, rather than testing
+        every known attribute against every body: django has ~14k class attributes and ~40k
+        methods, and the per-attribute form did not finish in 25 minutes."""
+        attrs = {}  # (file, class) -> {attr}
+        for f, fns in self.graph["functions"].items():
+            for fn in fns:
+                if isinstance(fn, dict) and fn.get("kind") == "constant" and fn.get("class"):
+                    attrs.setdefault((f, fn["class"]), set()).add(fn["name"])
+        if not attrs:
+            return 0
+        by_class = {}  # class name -> [(file, class)]  (for the `Class.attr` form)
+        for (f, c) in attrs:
+            by_class.setdefault(c, []).append((f, c))
+        overrides = {}  # (base file, base class, attr) -> [(file, class)]
+        for f, cs in self.graph["classes"].items():
+            for cname, entry in cs.items():
+                own = attrs.get((f, cname))
+                if not own:
+                    continue
+                for parent in [entry.get("superclass")] + list(entry.get("interfaces") or []):
+                    if not parent:
+                        continue
+                    pf = self.resolve_class_file(f, parent)
+                    if not pf:
+                        continue
+                    for a in own & attrs.get((pf, parent), set()):
+                        overrides.setdefault((pf, parent, a), []).append((f, cname))
+
+        def visible(file_path, cls):
+            """{attr: (defining file, defining class)} for `self.<attr>` inside cls."""
+            out, seen, cur_f, cur_c, depth = {}, set(), file_path, cls, 0
+            while cur_c and (cur_f, cur_c) not in seen and depth < 8:
+                seen.add((cur_f, cur_c))
+                for a in attrs.get((cur_f, cur_c), ()):
+                    out.setdefault(a, (cur_f, cur_c))
+                entry = self.graph["classes"].get(cur_f, {}).get(cur_c) or {}
+                nxt = entry.get("superclass")
+                cur_f = (self.resolve_class_file(cur_f, nxt) or cur_f) if nxt else cur_f
+                cur_c, depth = nxt, depth + 1
+            return out
+
+        have = set()
+        for e in self.graph.get("execution_edges", []):
+            if e.get("confidence") == "uses":
+                have.add((e["from"].get("file"), e["from"].get("function"), e["from"].get("class"),
+                          e["to"].get("file"), e["to"].get("function"), e["to"].get("class")))
+        root = getattr(self, "project_root", None) or ""
+        vis_cache = {}
+        n = 0
+        for f, fns in self.graph["functions"].items():
+            methods = [fn for fn in fns if isinstance(fn, dict) and fn.get("kind") not in ("constant", "class", "value")
+                       and fn.get("start_line")]
+            if not methods:
+                continue
+            try:
+                with open(os.path.join(root, f), "r", encoding="utf-8", errors="replace") as fh:
+                    lines = fh.read().split("\n")
+            except OSError:
+                continue
+            for fn in methods:
+                body = "\n".join(lines[fn["start_line"]:fn.get("end_line") or fn["start_line"]])
+                targets = []
+                cls = fn.get("class")
+                if cls:
+                    key = (f, cls)
+                    if key not in vis_cache:
+                        vis_cache[key] = visible(f, cls)
+                    vis = vis_cache[key]
+                    if vis:
+                        for a in set(self._SELF_ATTR_RE.findall(body)):
+                            own = vis.get(a)
+                            if own:
+                                targets.append((own[0], own[1], a))
+                                targets.extend((of, oc, a) for of, oc in overrides.get((own[0], own[1], a), ()))
+                for cname, aname in set(self._QUAL_ATTR_RE.findall(body)):
+                    for af, ac in by_class.get(cname, ()):
+                        if aname in attrs[(af, ac)]:
+                            targets.append((af, ac, aname))
+                for tf, tc, a in targets:
+                    k = (f, fn["name"], fn.get("class"), tf, a, tc)
+                    if k in have:
+                        continue
+                    have.add(k)
+                    from_node = {"type": "FUNCTION", "file": f, "function": fn["name"]}
+                    if fn.get("class"):
+                        from_node["class"] = fn["class"]
+                    self.add_execution_edge(from_node=from_node,
+                                            to_node={"type": "FUNCTION", "file": tf, "function": a, "class": tc},
+                                            edge_type="FUNCTION_CALL", is_test=bool(fn.get("is_test")))
+                    self.graph["execution_edges"][-1]["confidence"] = "uses"
+                    self.graph["execution_edges"][-1]["via"] = "attribute"
+                    n += 1
+        return n
+
     def link_constant_uses(self):
         """Edge function -> constant for every module-level constant a function body reads,
         in its own file or imported by name (`from dj.global_settings import
@@ -1967,6 +2072,12 @@ class GraphBuilder:
         cls_file = self.resolve_class_file(file_path, class_name) or file_path
         meta = self.function_index.resolve_static(cls_file, class_name, method, want_static=bool(_want_static)) \
             or self.function_index.resolve_function(cls_file, f"{class_name}.{method}")
+        if isinstance(meta, dict) and meta.get("kind") == "constant":
+            # `self.CHECKER_CLASS(...)`: the name is a class ATTRIBUTE that happens to hold a
+            # callable. Its node exists for blast radius (link_attribute_uses), but a CALL
+            # through it must still reach infer_class_attribute_injection's candidates,
+            # not stop at the attribute node itself.
+            meta = None
         if meta:
             return cls_file, meta
         sup = (self.graph["classes"].get(cls_file, {}).get(class_name) or {}).get("superclass")
@@ -2248,10 +2359,25 @@ class GraphBuilder:
                 if not c.get("receiver") and c.get("function"):
                     called.add(c["function"])
         for sm in semantic_matches:
-            if sm.match_type != "VARIABLE_ASSIGNMENT" or sm.owner_function or sm.get("assign.class"):
+            if sm.match_type != "VARIABLE_ASSIGNMENT" or sm.owner_function:
                 continue
-            name = sm.get("assign.variable")
+            name = sm.get("assign.variable") or sm.get("field.variable")
             if not name or not re.match(r"^[A-Za-z_]\w*$", name):
+                continue
+            owner_cls = sm.get("assign.class")
+            if owner_cls:
+                # a CLASS ATTRIBUTE (`regex = _lazy_re_compile(...)` on django's URLValidator,
+                # `VIEWS = "owners/form"` on a Spring controller): a node of its own, so a change
+                # to it has a blast radius -- the methods that read `self.<attr>` (link_attribute_uses)
+                if name.startswith("__") or self.function_index.resolve_function(sm.file_path, f"{owner_cls}.{name}"):
+                    continue
+                meta = {"name": name, "class": owner_cls, "file": sm.file_path,
+                        "start_line": sm.start_point[0] + 1, "end_line": sm.end_point[0] + 1, "kind": "constant"}
+                if getattr(sm, "is_test", False):
+                    meta["is_test"] = True
+                self.ensure_file("functions", sm.file_path)
+                self.function_index.register_function(file_path=sm.file_path, function_name=f"{owner_cls}.{name}", metadata=meta)
+                self.graph["functions"][sm.file_path].append(dict(meta))
                 continue
             if self.function_index.resolve_function(sm.file_path, name):
                 continue

@@ -9,7 +9,7 @@ It answers the three questions file search cannot:
 
 Python · JavaScript · TypeScript · Java.
 
-Landing page: <https://mohdajeem.github.io/token_reducer_engine/>
+Landing page: <https://landing-page-html-six.vercel.app/>
 
 ---
 

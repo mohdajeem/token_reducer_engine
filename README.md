@@ -46,13 +46,29 @@ SWE-bench Verified tasks using their published run artifacts:
 |---|---:|---:|
 | Fix's file in the top 5 | **97%** | 87% |
 | Fix's function identified | **80%** | 63% |
-| Regression suite kept to re-run (median) | 80% | **14%** |
+| Regression suite kept to re-run (median) | 88% | **16%** |
+| Tests kept that the fix is meant to change (lower is better) | 463 | **9** |
 | Model calls to produce that answer | 3 / task | **0** |
 
 Read honestly: a three-prompt LLM pipeline still localises better, because it understands the
-issue text. The graph wins downstream — a regression suite a fifth the size, containing none of
-the tests the fix is meant to change, at zero inference cost. Combining the two file lists was
-perfect on that sample.
+issue text. The graph wins downstream — a regression suite a fifth the size, keeping 50x fewer of
+the tests the fix is meant to change (9 against 463), at zero inference cost. Combining the two
+file lists found the right file on all 30 tasks, which neither managed alone.
+
+The graph's own failure is the opposite one: on 4 of the 30 tasks it selects no tests at all.
+Safe, and useless.
+
+Prompt size, measured the other way round — the same agent, same tasks, once reading whole
+files and once reading the engine's slices, with the target symbol given in both arms:
+
+| | baseline | engine |
+|---|---:|---:|
+| Input tokens, 610 tasks | 39.5M | **1.1M** |
+| Tasks passed | parity | parity |
+
+That 97% holds **when the target symbol is known** — an IDE assistant, a code review, a
+refactor. An agent that must first find the bug from an issue description pays for the search,
+and the saving does not survive it; see Known limits.
 
 ## A worked example
 
@@ -161,6 +177,13 @@ python src/tests/run_all_tests.py
   Java-level accuracy there.
 - Per-language figures come from one repository each, and the SWE-bench figures from 30 tasks.
   Directions are solid; treat the exact percentages as approximate.
+- **The 97% prompt reduction does not transfer to unguided bug fixing.** Measured on 6 SWE-bench
+  Verified tasks across 6 repositories, with the agent finding the target itself, the median
+  change in tokens was zero — the extra lookups needed to locate the symbol cost about what the
+  smaller context saves. What did improve was the worst case: the widest run used 608k tokens
+  against the baseline's 1.72M.
+- Regression selection returns nothing on roughly 1 task in 8 (4 of 30), usually where the
+  changed symbol is a class attribute or the tests are generated at import time.
 
 ## Layout
 

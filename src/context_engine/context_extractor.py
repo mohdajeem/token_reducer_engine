@@ -20,6 +20,23 @@ class ContextExtractor:
     # INIT
     # ======================================================
 
+    def _parse_cached(self, parser, content, key):
+        """One parse per (file, content) for the life of this extractor.
+
+        Every extract_* helper parsed the file from scratch, so a query returning 150 snippets
+        out of one file parsed that file 150 times and walked the whole AST each time --
+        0.43s of parsing plus 0.42s of tree walking in a 0.92s query. A ContextExtractor is
+        built per query and the file cannot change underneath it, so the tree is reusable.
+        """
+        cache = getattr(self, "_tree_cache", None)
+        if cache is None:
+            cache = self._tree_cache = {}
+        ck = (key, len(content), hash(content))
+        hit = cache.get(ck)
+        if hit is None:
+            hit = cache[ck] = parser.parse(bytes(content, "utf-8"))
+        return hit
+
     def __init__(
 
         self,
@@ -515,7 +532,7 @@ class ContextExtractor:
             parser = lm.get_parser(ext)
             if parser:
                 try:
-                    tree = parser.parse(bytes(content, "utf-8"))
+                    tree = self._parse_cached(parser, content, relative_path)
                     top_level_snippets = []
                     
                     for child in tree.root_node.children:
@@ -580,7 +597,7 @@ class ContextExtractor:
         parser = lm.get_parser(ext)
         if parser:
             try:
-                tree = parser.parse(bytes(content, "utf-8"))
+                tree = self._parse_cached(parser, content, relative_path)
                 
                 def find_func_node(node):
                     is_func_def = False
@@ -863,7 +880,7 @@ class ContextExtractor:
             return None
             
         try:
-            tree = parser.parse(bytes(content, "utf-8"))
+            tree = self._parse_cached(parser, content, relative_path)
             
             def find_route_node(node):
                 if node.type == "call_expression":
@@ -1144,7 +1161,7 @@ class ContextExtractor:
             return None
 
         try:
-            tree = parser.parse(bytes(content, "utf-8"))
+            tree = self._parse_cached(parser, content, relative_path)
             
             def find_func_node(node):
                 is_func_def = False
@@ -1391,7 +1408,7 @@ class ContextExtractor:
             return content
 
         try:
-            tree = parser.parse(bytes(content, "utf-8"))
+            tree = self._parse_cached(parser, content, relative_path)
             matched_nodes = []
 
             def search_nodes(node):
@@ -1479,7 +1496,7 @@ class ContextExtractor:
             return []
 
         try:
-            tree = parser.parse(bytes(content, "utf-8"))
+            tree = self._parse_cached(parser, content, relative_path)
             
             def find_func_node(node):
                 is_func_def = False
@@ -1507,17 +1524,27 @@ class ContextExtractor:
                         except:
                             name_text = str(name_node.text)
                         
-                        actual_caller = caller_name.split(".")[-1] if "." in caller_name else caller_name
-                        if name_text == actual_caller:
-                            return node
+                        # first definition wins, which is what the old early return gave
+                        _index.setdefault(name_text, node)
 
                 for child in node.children:
-                    res = find_func_node(child)
-                    if res:
-                        return res
+                    find_func_node(child)
                 return None
 
-            caller_node = find_func_node(tree.root_node)
+            # One walk per file, not per caller. This is called once for every caller of the
+            # target; walking the whole tree each time was 395,100 node visits and 0.36s of a
+            # 0.33s query on a 154-class file.
+            _ck = (relative_path, len(content), hash(content))
+            _cache = getattr(self, "_callsite_index", None)
+            if _cache is None:
+                _cache = self._callsite_index = {}
+            _index = _cache.get(_ck)
+            if _index is None:
+                _index = _cache[_ck] = {}
+                find_func_node(tree.root_node)
+
+            actual_caller = caller_name.split(".")[-1] if "." in caller_name else caller_name
+            caller_node = _index.get(actual_caller)
             if not caller_node:
                 return []
 
@@ -1589,7 +1616,7 @@ class ContextExtractor:
             return None
 
         try:
-            tree = parser.parse(bytes(content, "utf-8"))
+            tree = self._parse_cached(parser, content, relative_path)
             
             def find_class_node(node):
                 if ext == ".py" and node.type == "class_definition":
@@ -1733,7 +1760,7 @@ class ContextExtractor:
             return None
 
         try:
-            tree = parser.parse(bytes(content, "utf-8"))
+            tree = self._parse_cached(parser, content, relative_path)
             import_snippets = []
             seen_imports = set()
             
@@ -1796,7 +1823,7 @@ class ContextExtractor:
             return None
 
         try:
-            tree = parser.parse(bytes(content, "utf-8"))
+            tree = self._parse_cached(parser, content, relative_path)
             actual_func = function_name.split(".")[-1] if "." in function_name else function_name
             
             def find_func_node(node):

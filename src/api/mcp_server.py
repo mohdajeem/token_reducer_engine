@@ -315,6 +315,11 @@ def mcp_build_graph(repo_path: str, force_rebuild: bool = False, watch: bool = F
                 f"  - Execution Edges: {edges}"
             )
 
+# repo_path -> (file_count, char_count). A checkout does not change size during a run, and
+# recomputing it per query read the entire repository every time.
+_REPO_SIZE_CACHE = {}
+
+
 def log_query_telemetry(repo_path: str, target: str, policy: str, context: dict):
     """
     Shadow logs context query metrics to snapshots/vibecoding_metrics.json.
@@ -325,20 +330,27 @@ def log_query_telemetry(repo_path: str, target: str, policy: str, context: dict)
         
     import datetime
     try:
-        # 1. Repo size calculations
-        file_count = 0
-        char_count = 0
-        for root, dirs, files in os.walk(repo_path):
-            dirs[:] = [d for d in dirs if d not in (".git", "node_modules", "dist", "build", ".venv", "venv", ".sandbox", ".semantic_cache")]
-            for file in files:
-                if file.endswith((".js", ".ts", ".py", ".json", ".scm", ".md")):
-                    file_count += 1
-                    try:
-                        with open(os.path.join(root, file), "r", encoding="utf-8") as f:
-                            char_count += len(f.read())
-                    except:
-                        pass
+        # 1. Repo size calculations -- measured once per checkout.
+        # This walked the whole repo and read every source file on EVERY query, for a number
+        # that cannot change during a run: 0.3s here, and on xarray 40 MB of reads per query.
+        _cached = _REPO_SIZE_CACHE.get(repo_path)
+        if _cached is not None:
+            file_count, char_count = _cached
+        else:
+            file_count = 0
+            char_count = 0
+            for root, dirs, files in os.walk(repo_path):
+                dirs[:] = [d for d in dirs if d not in (".git", "node_modules", "dist", "build", ".venv", "venv", ".sandbox", ".semantic_cache")]
+                for file in files:
+                    if file.endswith((".js", ".ts", ".py", ".json", ".scm", ".md")):
+                        file_count += 1
+                        try:
+                            with open(os.path.join(root, file), "r", encoding="utf-8") as f:
+                                char_count += len(f.read())
+                        except:
+                            pass
                         
+            _REPO_SIZE_CACHE[repo_path] = (file_count, char_count)
         repo_tokens = char_count // 4
         
         # 2. Semantic Context calculations

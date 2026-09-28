@@ -737,6 +737,21 @@ class GraphBuilder:
                 return f
         return None
 
+    def bases_of(self, file_path, class_name):
+        """Every base of class_name, in declaration order.
+
+        classes[file][cls] keeps `superclass` (the first base) because older call sites read
+        it, and `bases` (all of them). Reading `superclass` alone is what made
+        `class CountVectorizer(BaseEstimator, VectorizerMixin)` resolve nothing, and six
+        separate walks were doing it. They all come through here now.
+        """
+        entry = (self.graph["classes"].get(file_path) or {}).get(class_name) or {}
+        bases = entry.get("bases")
+        if bases:
+            return list(bases)
+        sup = entry.get("superclass")
+        return self._base_names(sup) if sup else []
+
     def resolve_field_type(self, file_path, class_name, field, _depth=0):
         """Declared/assigned type of `this.<field>` in class_name (walking superclasses)."""
         if not class_name or _depth > 8:
@@ -748,8 +763,10 @@ class GraphBuilder:
             ftype = self.option_defaults.get(ftype[7:])
         if ftype:
             return ftype
-        if entry.get("superclass"):
-            return self.resolve_field_type(cls_file, entry["superclass"], field, _depth + 1)
+        for _sup in self.bases_of(cls_file, class_name):
+            found = self.resolve_field_type(cls_file, _sup, field, _depth + 1)
+            if found:
+                return found
         return None
 
     def infer_parameter_types_from_flow(self):
@@ -1318,13 +1335,19 @@ class GraphBuilder:
             if m:
                 inject.setdefault((vs["file"], cls), {})[var.split(".", 1)[1]] = m.group(1)
         def chain(file, cls, depth=0):
+            # all bases, not just the first, and deduplicated because two of them may lead
+            # back to the same grandparent
             out = [(file, cls)]
-            entry = (classes.get(file) or {}).get(cls) or {}
-            sup = entry.get("superclass")
-            if sup and depth < 8:
-                sf = self.resolve_class_file(file, sup) or file
-                out += chain(sf, sup, depth + 1)
-            return out
+            if depth < 32:
+                for sup in self.bases_of(file, cls):
+                    sf = self.resolve_class_file(file, sup) or file
+                    out += chain(sf, sup, depth + 1)
+            seen, uniq = set(), []
+            for item in out:
+                if item not in seen:
+                    seen.add(item)
+                    uniq.append(item)
+            return uniq
 
         n = 0
         for f, cs in classes.items():
@@ -1503,7 +1526,7 @@ class GraphBuilder:
         parents = []  # (impl file, impl class, parent name)
         for f, cs in self.graph["classes"].items():
             for cname, entry in cs.items():
-                for p in [entry.get("superclass")] + list(entry.get("interfaces") or []):
+                for p in self.bases_of(f, cname) + list(entry.get("interfaces") or []):
                     if p:
                         parents.append((f, cname, p))
         if not parents:
@@ -1554,7 +1577,11 @@ class GraphBuilder:
         attrs = {}  # (file, class) -> {attr}
         for f, fns in self.graph["functions"].items():
             for fn in fns:
-                if isinstance(fn, dict) and fn.get("kind") == "constant" and fn.get("class"):
+                # Properties belong here as much as plain class attributes do: both are read
+                # as `self.<name>`, so both need an attribute link or their readers never
+                # appear in the blast radius.
+                if isinstance(fn, dict) and fn.get("class") and (
+                        fn.get("kind") == "constant" or fn.get("is_property")):
                     attrs.setdefault((f, fn["class"]), set()).add(fn["name"])
         if not attrs:
             return 0
@@ -1567,7 +1594,7 @@ class GraphBuilder:
                 own = attrs.get((f, cname))
                 if not own:
                     continue
-                for parent in [entry.get("superclass")] + list(entry.get("interfaces") or []):
+                for parent in self.bases_of(f, cname) + list(entry.get("interfaces") or []):
                     if not parent:
                         continue
                     pf = self.resolve_class_file(f, parent)
@@ -1578,15 +1605,19 @@ class GraphBuilder:
 
         def visible(file_path, cls):
             """{attr: (defining file, defining class)} for `self.<attr>` inside cls."""
-            out, seen, cur_f, cur_c, depth = {}, set(), file_path, cls, 0
-            while cur_c and (cur_f, cur_c) not in seen and depth < 8:
+            # Breadth-first over EVERY base. A single chain missed any attribute defined on
+            # a second base, which for a mixin is where attributes usually live. First one
+            # found wins, which is the order Python resolves them in.
+            out, seen, queue = {}, set(), [(file_path, cls, 0)]
+            while queue:
+                cur_f, cur_c, depth = queue.pop(0)
+                if not cur_c or (cur_f, cur_c) in seen or depth > 32:
+                    continue
                 seen.add((cur_f, cur_c))
                 for a in attrs.get((cur_f, cur_c), ()):
                     out.setdefault(a, (cur_f, cur_c))
-                entry = self.graph["classes"].get(cur_f, {}).get(cur_c) or {}
-                nxt = entry.get("superclass")
-                cur_f = (self.resolve_class_file(cur_f, nxt) or cur_f) if nxt else cur_f
-                cur_c, depth = nxt, depth + 1
+                for nxt in self.bases_of(cur_f, cur_c):
+                    queue.append((self.resolve_class_file(cur_f, nxt) or cur_f, nxt, depth + 1))
             return out
 
         have = set()
@@ -1627,6 +1658,8 @@ class GraphBuilder:
                         if aname in attrs[(af, ac)]:
                             targets.append((af, ac, aname))
                 for tf, tc, a in targets:
+                    if tf == f and a == fn["name"] and tc == fn.get("class"):
+                        continue  # a property reading its own name is not a caller of itself
                     k = (f, fn["name"], fn.get("class"), tf, a, tc)
                     if k in have:
                         continue
@@ -2482,6 +2515,10 @@ class GraphBuilder:
             metadata["class"] = owner_class
         if sm.get("function.static"):
             metadata["static"] = True
+        if sm.get("function.property"):
+            # read as `self.x`, not called as `self.x()`, so link_attribute_uses is the only
+            # thing that can give it callers
+            metadata["is_property"] = True
         if sm.get("function.fixture"):
             metadata["fixture"] = sm.get("function.fixture")  # True, or the injected name
         if sm.get("function.parent"):
@@ -2685,7 +2722,12 @@ class GraphBuilder:
                 and getattr(sm, "owner_class", None):
             cls = sm.owner_class
             if raw_object_name == "super" or raw_object_name.startswith("super("):
-                cls = (self.graph["classes"].get(sm.file_path, {}).get(cls) or {}).get("superclass")
+                # super() follows the MRO, so try each base in declaration order instead of
+                # only the first: in `class X(External, Mixin)` the method is on the mixin.
+                _supers = self.bases_of(sm.file_path, cls)
+                cls = next((_s for _s in _supers
+                            if self.resolve_method(sm.file_path, _s, func)[1]),
+                           _supers[0] if _supers else None)
             typed_file, typed_meta = self.resolve_method(sm.file_path, cls, func)
             typed_class = cls
         elif resolved_type:

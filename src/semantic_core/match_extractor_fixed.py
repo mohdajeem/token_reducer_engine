@@ -606,6 +606,29 @@ def _is_static_method(fnode):
     return False
 
 
+def _is_property_method(fnode):
+    """A getter: Python `@property` / `@cached_property` / `@x.setter`, JS/TS `get x()`.
+
+    Its call site is a property READ -- `self.size`, never `self.size()` -- so it produces no
+    call record at all, and without being linked as an attribute its readers are invisible.
+    """
+    if fnode.type in ("method_definition", "method_signature"):
+        for ch in fnode.children:
+            if ch.type in ("get", "set") or (not ch.is_named and _text(ch) in ("get", "set")):
+                return True
+        return False
+    if (fnode.type == "function_definition" and fnode.parent is not None
+            and fnode.parent.type == "decorated_definition"):
+        for ch in fnode.parent.children:
+            if ch.type != "decorator":
+                continue
+            d = _text(ch).strip("@ ").split("(")[0].strip()
+            if (d in ("property", "cached_property", "functools.cached_property")
+                    or d.endswith((".setter", ".getter", ".deleter"))):
+                return True
+    return False
+
+
 def _is_pytest_fixture(fnode):
     """A def decorated with @pytest.fixture / @fixture / @pytest.fixture(scope=...).
     Returns False, True, or the injected name when the decorator says name="...". """
@@ -949,6 +972,8 @@ def safe_extract_semantic_matches(matches, file_path, tree):
                         capture_dict["function.superclass"] = sup
                     if fnode is not None and _is_static_method(fnode):
                         capture_dict["function.static"] = True
+                    if fnode is not None and _is_property_method(fnode):
+                        capture_dict["function.property"] = True
                     if fnode is not None and fnode.type == "method_declaration":
                         ann = _java_annotations(fnode)
                         if ann:

@@ -2064,7 +2064,27 @@ class GraphBuilder:
             self.graph["execution_edges"] = [e for i, e in enumerate(edges)
                                              if i >= first_new_edge or e.get("call_id") not in replaced]
 
-    def resolve_method(self, file_path, class_name, method, _depth=0, _want_static=False):
+    @staticmethod
+    def _base_names(raw):
+        """Usable base-class names from a `class X(...)` header capture.
+
+        Accepts a single name or a list, because tree-sitter may report the bases as one
+        capture holding several nodes or as one match per base. Drops what cannot name a
+        class in this project: keyword arguments (`metaclass=ABCMeta`), unpacking (`*bases`),
+        and `object`. `pkg.mod.Base` keeps `Base`, `Generic[T]` keeps `Generic`.
+        """
+        out = []
+        for item in (raw if isinstance(raw, (list, tuple)) else [raw]):
+            name = str(item or "").strip()
+            if not name or "=" in name or name.startswith("*"):
+                continue
+            name = name.split(".")[-1].split("[")[0].strip()
+            if name and name not in ("object", "metaclass") and name not in out:
+                out.append(name)
+        return out
+
+    def resolve_method(self, file_path, class_name, method, _depth=0, _want_static=False,
+                       _seen=None):
         """(file, metadata) for class_name.method, walking the superclass chain. _want_static:
         the receiver is the class itself (`Lexer.lex(src)`), so a static method is preferred."""
         if not class_name or _depth > 8:
@@ -2080,9 +2100,24 @@ class GraphBuilder:
             meta = None
         if meta:
             return cls_file, meta
-        sup = (self.graph["classes"].get(cls_file, {}).get(class_name) or {}).get("superclass")
-        if sup:
-            return self.resolve_method(cls_file, sup, method, _depth + 1, _want_static)
+        # Walk EVERY base, left to right. Walking only `superclass` -- the first one -- meant
+        # `class CountVectorizer(BaseEstimator, VectorizerMixin)` ended its search at
+        # BaseEstimator, which is not in the project, and never looked at the mixin that
+        # actually defines the method. `_seen` keeps a diamond from being re-walked.
+        entry = self.graph["classes"].get(cls_file, {}).get(class_name) or {}
+        bases = entry.get("bases")
+        if not bases:
+            bases = self._base_names(entry.get("superclass")) if entry.get("superclass") else []
+        _seen = set() if _seen is None else _seen
+        for sup in bases:
+            key = (cls_file, sup)
+            if key in _seen:
+                continue
+            _seen.add(key)
+            found_file, found_meta = self.resolve_method(cls_file, sup, method, _depth + 1,
+                                                         _want_static, _seen)
+            if found_meta:
+                return found_file, found_meta
         return None, None
 
     # ======================================================
@@ -3055,10 +3090,21 @@ class GraphBuilder:
             if name:
                 entry = self.graph["classes"].setdefault(sm.file_path, {}).setdefault(name, {"superclass": None})
                 sup = sm.get("contract.superclass")
-                if sup and not entry.get("superclass") and sup.strip() not in ("object", "metaclass"):
-                    # `class IndexVariable(Variable): pass` -- no methods, so handle_function_def
-                    # never records the base; method lookups must still walk to Variable
-                    entry["superclass"] = sup.strip().split("=")[-1].split(".")[-1].split("[")[0]
+                # Accumulate rather than assign: the query reports one base per match, so this
+                # runs once per base for the same class. `superclass` stays the first base for
+                # the call sites that still read it; `bases` is the full list resolve_method
+                # walks.
+                names = self._base_names(sup) if sup else []
+                if names:
+                    known = entry.setdefault("bases", [])
+                    for n in names:
+                        if n not in known:
+                            known.append(n)
+                    if not entry.get("superclass"):
+                        # `class IndexVariable(Variable): pass` -- no methods, so
+                        # handle_function_def never records the base; method lookups must
+                        # still walk to Variable
+                        entry["superclass"] = known[0]
                 if not self.function_index.resolve_function(sm.file_path, name):
                     self.ensure_file("functions", sm.file_path)
                     metadata = {"name": name, "file": sm.file_path, "start_line": sm.start_point[0] + 1,

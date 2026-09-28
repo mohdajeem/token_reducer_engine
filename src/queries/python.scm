@@ -262,7 +262,7 @@
 
 (class_definition
   name: (identifier) @contract.name
-  superclasses: (argument_list . (_) @contract.superclass)?)
+  superclasses: (argument_list (_) @contract.superclass)?)
 
 (function_definition
   name: (identifier) @export.name)

@@ -373,7 +373,12 @@ class ContextExtractor:
             if is_primary_target:
                 snippet = self.extract_function_code(file_path, lookup_name)
             else:
-                snippet = self.extract_function_signature(file_path, function_name)
+                # The qualified name matters here too. Reference snippets went through
+                # this call with the BARE name, so asking about Beta.helper described
+                # its related code using Alpha.shared's signature -- the same
+                # wrong-class bug as the body lookup had, in the path whose whole job
+                # is to tell the model what the blast radius contains.
+                snippet = self.extract_function_signature(file_path, lookup_name)
                 if not snippet:
                     snippet = self.extract_function_code(file_path, lookup_name)
 

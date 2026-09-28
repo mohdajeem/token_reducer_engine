@@ -56,15 +56,22 @@ class TestRealtimeSync(unittest.TestCase):
 
         
         # Start watcher with a short polling interval (0.2s)
+        interval = 0.2
         watcher = GraphWatcher(
             project_root=self.temp_dir,
             incremental_graph_manager=manager,
             lock=self.lock,
-            interval=0.2
+            interval=interval
         )
         watcher.start()
 
         try:
+            # Let the watcher complete a scan BEFORE the file changes. start() returns
+            # immediately and the first scan is up to `interval` later; writing in that window
+            # makes the watcher baseline the NEW content, leaving no change to detect at all.
+            # That race, not slowness, is why this test passed once in three identical runs.
+            time.sleep(interval * 3)
+
             # 4. Modify test file by appending a new function
             with open(test_file, "w", encoding="utf-8") as f:
                 f.write("function originalFunc() { return 1; }\nfunction dynamicFunc() { return 2; }\n")

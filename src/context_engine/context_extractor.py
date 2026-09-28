@@ -71,9 +71,15 @@ class ContextExtractor:
         target = impact_result.get("target")
         target_file = None
         target_func = None
+        target_cls = None
         if isinstance(target, dict):
             target_file = target.get("file")
             target_func = target.get("function")
+            # resolve_target_node keeps the class separately from the function, because
+            # execution edges store bare method names. Reading only "function" meant
+            # Blueprint.__init__ arrived here as plain "__init__" and matched whichever
+            # __init__ came first in the file.
+            target_cls = target.get("class")
         elif isinstance(target, str):
             target_func = target
 
@@ -95,7 +101,7 @@ class ContextExtractor:
         # Automatically extract constructor if targeting a class method (either Class.method spec or AST parent class detection)
         if target_func:
             actual_func = target_func.split(".")[-1] if "." in target_func else target_func
-            cls_name = target_func.split(".", 1)[0] if "." in target_func else None
+            cls_name = target_cls or (target_func.split(".", 1)[0] if "." in target_func else None)
             
             t_file = target_file
             if not t_file:
@@ -146,10 +152,15 @@ class ContextExtractor:
                         key = (fpath, fname)
                         if key not in seen:
                             seen.add(key)
-                            affected_functions.append({
+                            entry = {
                                 "file": fpath,
                                 "function": fname
-                            })
+                            }
+                            # without this the class is lost here and the body lookup
+                            # downstream can only match on the bare name
+                            if node.get("class"):
+                                entry["class"] = node["class"]
+                            affected_functions.append(entry)
                 elif ntype == "ROUTE":
                     fpath = node.get("file")
                     rpath = node.get("route")
@@ -336,12 +347,18 @@ class ContextExtractor:
                     if norm_fp == norm_tf:
                         is_primary_target = True
 
+            # extract_function_code disambiguates same-named methods when it is handed a
+            # qualified "Class.method"; that path existed and nothing ever used it.
+            _cls = item.get("class")
+            lookup_name = (f"{_cls}.{function_name}"
+                           if _cls and "." not in str(function_name) else function_name)
+
             if is_primary_target:
-                snippet = self.extract_function_code(file_path, function_name)
+                snippet = self.extract_function_code(file_path, lookup_name)
             else:
                 snippet = self.extract_function_signature(file_path, function_name)
                 if not snippet:
-                    snippet = self.extract_function_code(file_path, function_name)
+                    snippet = self.extract_function_code(file_path, lookup_name)
 
             if snippet:
 
@@ -545,8 +562,11 @@ class ContextExtractor:
                         fns = v
                         break
 
+            # a qualified name must not fall through this pass and match the wrong class
+            _q_cls, _q_name = (function_name.split(".", 1) if "." in str(function_name)
+                               else (None, function_name))
             for fn in fns:
-                if fn.get("name") == function_name:
+                if fn.get("name") == _q_name and (not _q_cls or fn.get("class") == _q_cls):
                     start_line = fn.get("start_line")
                     end_line = fn.get("end_line")
                     if start_line is not None and end_line is not None:

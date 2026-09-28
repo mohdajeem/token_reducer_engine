@@ -371,6 +371,7 @@ def mcp_query_context(
         try:
             combined_snippets = []
             seen_snippet_keys = set()
+            _relations = {}          # (file, function) -> how it relates to the target
             combined_chains = []
             combined_files = []
 
@@ -392,6 +393,30 @@ def mcp_query_context(
                     
                     impact = policy_engine.resolve_impact(target_node, policy_enum)
                     context = extractor.extract_context(impact)
+
+                # The traversal result was computed and then dropped: extract_context returns
+                # byte-identical snippets whether upstream/downstream hold 0 edges or 31, so
+                # the relationship never reached the caller. Keep it here and attach it below.
+                for _dir, _key in (("caller", "upstream"), ("callee", "downstream")):
+                    for _e in (impact.get(_key) or []):
+                        if not isinstance(_e, dict):
+                            continue
+                        # the far end of the edge is the related symbol; the near end is us
+                        _other = _e.get("from") if _dir == "caller" else _e.get("to")
+                        if not isinstance(_other, dict):
+                            continue
+                        _f = str(_other.get("file") or "").replace("\\", "/")
+                        _fn = str(_other.get("function") or "")
+                        if not _f or not _fn:
+                            continue
+                        _rk = (_f, _fn)
+                        if _rk not in _relations:
+                            _relations[_rk] = {
+                                "direction": _dir,
+                                "depth": _e.get("depth"),
+                                "edge_type": _e.get("edge_type"),
+                                "via": _e.get("via"),
+                            }
 
                 for snippet in context.get("code_snippets", []):
                     if snippet.get("file"):
@@ -416,11 +441,162 @@ def mcp_query_context(
 
                 log_query_telemetry(repo_path, single_target, policy, context)
 
+            # --- EXPERIMENTAL, env-gated: cap the blast radius for edit-shaped queries ---
+            # Measured: FUNCTION:Session.request returns 57,123 chars from 8 files, 188% of the
+            # 30,373-char file it lives in, because the traversal takes a transitive closure.
+            # For an edit the model needs the target symbol and its immediate surroundings, not
+            # the dependency graph. This trims the RESULT; it does not change the traversal, and
+            # with neither variable set the output is unchanged.
+            # EXPERIMENTAL: drop slices the model cannot quote. The extractor can emit the
+            # same symbol twice, once with its signature de-indented, and can leave a
+            # "[Body pruned...]" marker inside a slice. Either makes a SEARCH block unmatchable,
+            # which is how a task with the right file and the right symbol still failed.
+            if os.environ.get("MCP_EDIT_VERBATIM", "").strip() not in ("", "0", "false"):
+                _src_cache = {}
+                _keep = []
+                for _sn in combined_snippets:
+                    _f = (_sn.get("file") or "").replace("\\", "/")
+                    if not _f:
+                        continue
+                    if _f not in _src_cache:
+                        try:
+                            with open(os.path.join(repo_path, _f), "r",
+                                      encoding="utf-8", errors="replace") as _fh:
+                                _src_cache[_f] = set(_fh.read().split("\n"))
+                        except Exception:  # noqa: BLE001
+                            _src_cache[_f] = None
+                    _lines_in_file = _src_cache[_f]
+                    if _lines_in_file is None:
+                        _keep.append(_sn)
+                        continue
+                    _code = str(_sn.get("code") or _sn.get("content") or "")
+                    _ls = [l for l in _code.split("\n") if l.strip()]
+                    if _ls and all(l in _lines_in_file for l in _ls):
+                        _keep.append(_sn)
+                if _keep:
+                    combined_snippets = _keep
+
+            # Attach the relationship. Without it a caller and an unrelated helper look
+            # identical to the model -- both are just code -- so the blast radius cannot
+            # influence the edit even when it is present.
+            for _sn in combined_snippets:
+                _f = (_sn.get("file") or "").replace("\\", "/")
+                _fn = str(_sn.get("function") or "")
+                _bare = _fn.replace("CONSTRUCTOR ", "").split(".")[-1].strip()
+                _rel = _relations.get((_f, _fn)) or _relations.get((_f, _bare))
+                if not _rel and _bare:
+                    for (_rf, _rfn), _cand in _relations.items():
+                        if _rf == _f and _rfn.split(".")[-1] == _bare:
+                            _rel = _cand
+                            break
+                if _rel:
+                    _sn["relation"] = _rel
+                    # Plain-English too. Any consumer sees the raw JSON -- an agent reading
+                    # {"direction": "caller", "depth": 1} has to infer what that implies,
+                    # which is exactly the inference that was not happening.
+                    _d = _rel.get("depth")
+                    if _rel.get("direction") == "caller":
+                        _sn["why"] = (f"CALLS the code you are editing (depth {_d}). If you "
+                                      f"change its signature, its behaviour, or WHEN it runs, "
+                                      f"this caller is affected and may break.")
+                    else:
+                        _sn["why"] = (f"IS CALLED BY the code you are editing (depth {_d}). "
+                                      f"Shown so you can see what it does. It has other "
+                                      f"callers, so changing it affects them too.")
+
+            # Mark what the model may quote. An edit has to reproduce existing lines exactly,
+            # and most of what comes back here is deliberately NOT exact -- pruned signatures,
+            # reconstructed import headers, cross-file context. Useful to read, impossible to
+            # quote. Without this distinction a model builds a SEARCH block out of a pruned
+            # signature and the patch silently fails to apply.
+            _src_lines = {}
+            for _sn in combined_snippets:
+                _f = (_sn.get("file") or "").replace("\\", "/")
+                if _f and _f not in _src_lines:
+                    try:
+                        with open(os.path.join(repo_path, _f), "r",
+                                  encoding="utf-8", errors="replace") as _fh:
+                            _src_lines[_f] = set(_fh.read().split("\n"))
+                    except Exception:  # noqa: BLE001
+                        _src_lines[_f] = None
+                _known = _src_lines.get(_f)
+                _code = str(_sn.get("code") or _sn.get("content") or "")
+                _body = [l for l in _code.split("\n") if l.strip()]
+                if _known is None or not _body:
+                    _sn["kind"] = "reference"
+                else:
+                    _sn["kind"] = ("editable" if all(l in _known for l in _body)
+                                   else "reference")
+
+            # kind-aware trimming. Reference snippets are why retrieval is worth doing, but
+            # measured against the same 6 tasks they cost 21,000 tokens and changed no outcome,
+            # so keep the ones nearest the edit and drop the far ones. Discarding ALL of them
+            # was tried and starved the multi-file arm down to 3/6.
+            if os.environ.get("MCP_KIND_TRIM", "").strip() not in ("", "0", "false"):
+                # `kind` must already be set. When this ran before the labelling, every snippet
+                # had kind=None, nothing counted as editable, and the trim quietly behaved like
+                # the same-file filter -- producing byte-identical output and looking like the
+                # change had been applied. Say so instead of guessing.
+                if any("kind" not in _s for _s in combined_snippets):
+                    raise RuntimeError("MCP_KIND_TRIM ran before snippets were labelled")
+                _keep_far = int(os.environ.get("MCP_REF_KEEP", "0") or 0)
+                _tfile = ""
+                for _t in target_list:
+                    _p = str(_t).split(":")
+                    if len(_p) >= 2 and _p[1].strip():
+                        _tfile = _p[1].strip().replace("\\", "/")
+                        break
+                _editable, _near, _far = [], [], []
+                for _sn in combined_snippets:
+                    _f = (_sn.get("file") or "").replace("\\", "/")
+                    if _sn.get("kind") == "editable":
+                        _editable.append(_sn)
+                    elif _tfile and _f.endswith(_tfile.split("/")[-1]):
+                        _near.append(_sn)
+                    else:
+                        _far.append(_sn)
+                _trimmed = _editable + _near + _far[:max(0, _keep_far)]
+                if _trimmed:
+                    combined_snippets = _trimmed
+
+            _cap = os.environ.get("MCP_EDIT_CAP", "").strip()
+            _same = os.environ.get("MCP_EDIT_SAME_FILE", "").strip() not in ("", "0", "false")
+            if (_cap or _same) and combined_snippets:
+                _tf = ""
+                for _t in target_list:
+                    _parts = str(_t).split(":")
+                    if len(_parts) >= 2 and _parts[1].strip():
+                        _tf = _parts[1].strip().replace("\\", "/")
+                        break
+                if _tf:
+                    _own = [x for x in combined_snippets
+                            if (x.get("file") or "").replace("\\", "/").endswith(_tf)]
+                    _other = [x for x in combined_snippets if x not in _own]
+                else:
+                    _own, _other = combined_snippets, []
+                _kept = _own if _same else (_own + _other)
+                if _cap:
+                    try:
+                        _kept = _kept[:max(1, int(_cap))]
+                    except ValueError:
+                        pass
+                if _kept:
+                    combined_snippets = _kept
+
             if not combined_snippets:
                 return {"error": f"Failed to resolve any target nodes from: {target_list}"}
 
             return {
                 "target_count": len(target_list),
+                # how many snippets the model may quote in a SEARCH block. When this is 0 the
+                # caller has context but nothing it can safely edit, which is worth knowing
+                # BEFORE a model call rather than after a failed patch.
+                "editable_count": sum(1 for x in combined_snippets
+                                      if x.get("kind") == "editable"),
+                # How many snippets the blast radius actually explains. 0 means the policy
+                # produced no edges -- LOCAL_EDIT never does -- so the caller can see that
+                # rather than assume a blast radius was delivered.
+                "related_count": sum(1 for x in combined_snippets if x.get("relation")),
                 "code_snippets": combined_snippets,
                 "execution_chains": combined_chains,
                 "relevant_files": combined_files,
@@ -868,12 +1044,24 @@ def _first_doc_line(lines, start_idx, python: bool):
     return ""
 
 
-def _signature_lines(lines, start_idx, python: bool, max_lines: int = 3):
-    """The definition header: from the start line to the line that opens the body."""
+def _signature_lines(lines, start_idx, python: bool, max_lines: int = 3, end_idx=None):
+    """
+    The definition header: from the start line to the line that opens the body.
+
+    `end_idx` (0-based, inclusive) is the symbol's own last line and hard-bounds the
+    window. Without it a symbol whose header has no body-opening token -- any module
+    constant, since `X = 1` ends in neither ':' nor '{' -- kept reading and absorbed the
+    following statements, reporting them as part of its own definition.
+    """
+    stop = min(len(lines), start_idx + max_lines)
+    if end_idx is not None:
+        stop = min(stop, end_idx + 1)
     out = []
-    for j in range(start_idx, min(len(lines), start_idx + max_lines)):
-        out.append(lines[j].rstrip())
+    for j in range(start_idx, max(stop, start_idx + 1)):
+        if j >= len(lines):
+            break
         t = lines[j].rstrip()
+        out.append(t)
         if (python and t.endswith(":")) or (not python and ("{" in t or t.endswith("=>") or t.endswith(";"))):
             break
     sig = " ".join(x.strip() for x in out)
@@ -883,11 +1071,15 @@ def _signature_lines(lines, start_idx, python: bool, max_lines: int = 3):
 @mcp.tool()
 def mcp_skeleton(file_path: str, max_symbols: int = 120, keywords: Optional[List[str]] = None) -> dict:
     """
-    A compressed view of one file: every function / method / class with its signature line,
-    a one-line doc summary, and its line span -- grouped by class, in source order. Roughly
-    3-8% of the tokens of the file itself. Read this first; then mcp_expand_signature /
-    expand_symbol only the bodies you need. `keywords` marks symbols whose span contains a
-    keyword (so the caller can see where an issue's terms land without reading bodies).
+    A compressed view of one file: EVERY function / method / class / constant with its
+    line span, in source order. Read this first; then mcp_expand_signature / expand_symbol
+    only the bodies you need.
+
+    `max_symbols` caps how many entries carry a signature and doc summary -- it never
+    removes a symbol from the listing. Past the cap an entry is name + line span only
+    (~10 tokens instead of ~50), so a large file stays completely mapped and nothing the
+    caller might need is hidden. `keywords` marks symbols whose span contains a keyword,
+    and those symbols keep their detail first.
 
     Args:
         file_path: Repo-relative path.
@@ -924,22 +1116,50 @@ def mcp_skeleton(file_path: str, max_symbols: int = 120, keywords: Optional[List
             "symbol": (fn["class"] + "." if fn.get("class") else "") + fn["name"],
             "kind": fn.get("kind") or ("method" if fn.get("class") else "function"),
             "lines": [fn["start_line"], fn.get("end_line") or fn["start_line"]],
-            "signature": _signature_lines(lines, i, python),
+            "signature": _signature_lines(lines, i, python,
+                                          end_idx=(fn.get("end_line") or fn["start_line"]) - 1),
             "doc": _first_doc_line(lines, i, python),
             **({"static": True} if fn.get("static") else {}),
             **({"is_test": True} if fn.get("is_test") else {}),
             **({"keyword_hits": [k for k in kws if k in body]} if kws else {}),
         })
-    truncated = len(items) > max_symbols
-    items = items[:max_symbols]
-    text_lines = [f"# {rel}  ({len(lines)} lines, {len(items)} symbols{', truncated' if truncated else ''})"]
+    # Which entries keep their full detail. Dropping the overflow entirely is what made
+    # the second half of a large file invisible (see this function's note above), so the
+    # cap now decides DETAIL, never EXISTENCE.
+    detailed = len(items) <= max_symbols
+    if not detailed:
+        # Keyword hits first (the caller asked about those words), then source order, so a
+        # relevant symbol late in the file outranks an irrelevant one at the top.
+        ranked = sorted(range(len(items)),
+                        key=lambda idx: (0 if items[idx].get("keyword_hits") else 1,
+                                         items[idx]["lines"][0]))
+        keep = set(ranked[:max_symbols])
+        for idx, it in enumerate(items):
+            if idx not in keep:
+                it.pop("signature", None)
+                it.pop("doc", None)
+                it["brief"] = True
+
+    n_brief = sum(1 for it in items if it.get("brief"))
+    head = f"# {rel}  ({len(lines)} lines, {len(items)} symbols"
+    if n_brief:
+        head += f"; {n_brief} listed by name only -- call mcp_skeleton with a larger "
+        head += "max_symbols, or mcp_query_context/expand_symbol, for their code"
+    head += ")"
+    text_lines = [head]
     for it in items:
         flag = ""
         if it.get("keyword_hits"):
             flag = "  <-- " + ", ".join(it["keyword_hits"])
+        if it.get("brief"):
+            text_lines.append(f"L{it['lines'][0]}-{it['lines'][1]}  {it['symbol']}{flag}")
+            continue
         doc = f"  // {it['doc']}" if it["doc"] else ""
         text_lines.append(f"L{it['lines'][0]}-{it['lines'][1]}  {it['signature']}{doc}{flag}")
-    return {"file": rel, "symbols": items, "truncated": truncated, "text": "\n".join(text_lines)}
+    # `truncated` kept for callers that check it, but it now means "some entries are
+    # name-only", not "some symbols are missing".
+    return {"file": rel, "symbols": items, "truncated": bool(n_brief),
+            "brief_count": n_brief, "text": "\n".join(text_lines)}
 
 # ==========================================================
 # DISCOVERY TOOLS -- symbol / literal search and neighbourhoods

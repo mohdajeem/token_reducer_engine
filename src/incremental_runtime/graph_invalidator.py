@@ -24,6 +24,8 @@ class GraphInvalidator:
 
         file_based_sections = [
 
+            "functions",
+
             "imports",
 
             "routes",
@@ -40,6 +42,7 @@ class GraphInvalidator:
 
             "arguments"
         ]
+
 
         for section in file_based_sections:
 

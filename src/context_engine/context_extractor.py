@@ -68,6 +68,15 @@ class ContextExtractor:
                   - "route_context" (List[Dict])
         """
 
+        target = impact_result.get("target")
+        target_file = None
+        target_func = None
+        if isinstance(target, dict):
+            target_file = target.get("file")
+            target_func = target.get("function")
+        elif isinstance(target, str):
+            target_func = target
+
         context = {
 
             "relevant_files": [],
@@ -82,6 +91,34 @@ class ContextExtractor:
 
             "route_context": []
         }
+
+        # Automatically extract constructor if targeting a class method (either Class.method spec or AST parent class detection)
+        if target_func:
+            actual_func = target_func.split(".")[-1] if "." in target_func else target_func
+            cls_name = target_func.split(".", 1)[0] if "." in target_func else None
+            
+            t_file = target_file
+            if not t_file:
+                for file_path, fns in self.graph.get("functions", {}).items():
+                    for fn in fns:
+                        name = fn.get("name") if isinstance(fn, dict) else fn
+                        if name == actual_func:
+                            t_file = file_path
+                            break
+                    if t_file:
+                        break
+
+            if not cls_name and t_file:
+                cls_name = self.find_parent_class_name(t_file, actual_func)
+
+            if t_file and cls_name:
+                constructor_code = self.extract_class_constructor(t_file, cls_name)
+                if constructor_code:
+                    context["code_snippets"].append({
+                        "file": t_file,
+                        "function": f"CONSTRUCTOR {cls_name}",
+                        "code": constructor_code
+                    })
 
         # ==================================================
         # AFFECTED FUNCTIONS
@@ -170,8 +207,7 @@ class ContextExtractor:
                             if os.path.exists(full_path):
                                 context["relevant_files"].append(fpath)
                                 try:
-                                    with open(full_path, "r", encoding="utf-8") as f:
-                                        file_content = f.read()
+                                    schema_snippet = self.extract_database_schema(fpath, model_name)
                                     snippet_exists = False
                                     for snip in context["code_snippets"]:
                                         if snip.get("file") == fpath and snip.get("function") == f"SCHEMA {model_name}":
@@ -181,10 +217,35 @@ class ContextExtractor:
                                         context["code_snippets"].append({
                                             "file": fpath,
                                             "function": f"SCHEMA {model_name}",
-                                            "code": file_content
+                                            "code": schema_snippet
                                         })
                                 except Exception as e:
                                     print(f"[ERROR extracting DATABASE schema]: {e}")
+                elif ntype == "FILE":
+                    fpath = node.get("file")
+                    if fpath:
+                        import os
+                        fpath = os.path.normpath(str(fpath)).replace("\\", "/")
+                        if fpath not in context["relevant_files"]:
+                            full_path = os.path.normpath(os.path.join(self.project_root, fpath))
+                            if os.path.exists(full_path):
+                                context["relevant_files"].append(fpath)
+                                try:
+                                    with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                                        file_content = f.read()
+                                    snippet_exists = False
+                                    for snip in context["code_snippets"]:
+                                        if snip.get("file") == fpath and snip.get("function") == "FILE":
+                                            snippet_exists = True
+                                            break
+                                    if not snippet_exists:
+                                        context["code_snippets"].append({
+                                            "file": fpath,
+                                            "function": "FILE",
+                                            "code": file_content
+                                        })
+                                except Exception as e:
+                                    print(f"[ERROR extracting FILE content]: {e}")
 
             target = impact_result.get("target")
             if isinstance(target, dict):
@@ -236,6 +297,18 @@ class ContextExtractor:
                         "relevant_files"
                     ].append(file_path)
 
+            # Auto-include top-level import headers for Python files
+            if file_path.endswith(".py"):
+                header_exists = any(snip.get("file") == file_path and snip.get("function") == "IMPORT_HEADER" for snip in context["code_snippets"])
+                if not header_exists:
+                    import_header = self.extract_import_header(file_path)
+                    if import_header:
+                        context["code_snippets"].append({
+                            "file": file_path,
+                            "function": "IMPORT_HEADER",
+                            "code": import_header
+                        })
+
             # ==============================================
             # STORE FUNCTION
             # ==============================================
@@ -253,14 +326,22 @@ class ContextExtractor:
             # EXTRACT SNIPPET
             # ==============================================
 
-            snippet = (
-                self.extract_function_code(
+            is_primary_target = False
+            if target_func and function_name == target_func:
+                if not target_file:
+                    is_primary_target = True
+                else:
+                    norm_fp = os.path.normpath(file_path).replace("\\", "/")
+                    norm_tf = os.path.normpath(target_file).replace("\\", "/")
+                    if norm_fp == norm_tf:
+                        is_primary_target = True
 
-                    file_path,
-
-                    function_name
-                )
-            )
+            if is_primary_target:
+                snippet = self.extract_function_code(file_path, function_name)
+            else:
+                snippet = self.extract_function_signature(file_path, function_name)
+                if not snippet:
+                    snippet = self.extract_function_code(file_path, function_name)
 
             if snippet:
 
@@ -383,13 +464,33 @@ class ContextExtractor:
         
         full_path = os.path.normpath(os.path.join(self.project_root, relative_path))
         if not os.path.exists(full_path):
-            return None
+            norm_rel = relative_path.replace("\\", "/").strip("/")
+            found_path = None
+            for root, dirs, files in os.walk(self.project_root):
+                if ".git" in root or "node_modules" in root:
+                    continue
+                for f in files:
+                    fp = os.path.join(root, f)
+                    rel = os.path.relpath(fp, self.project_root).replace("\\", "/")
+                    if rel.endswith(norm_rel) or norm_rel.endswith(rel):
+                        found_path = fp
+                        break
+                if found_path:
+                    break
+            if found_path:
+                full_path = found_path
+            else:
+                return None
 
         try:
-            with open(full_path, "r", encoding="utf-8") as f:
+            with open(full_path, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
         except:
             return None
+
+        lines = content.splitlines()
+        if len(lines) < 50 and function_name != "GLOBAL_SCOPE":
+            return content
 
         if function_name == "GLOBAL_SCOPE":
             _, ext = os.path.splitext(relative_path)
@@ -476,18 +577,173 @@ class ContextExtractor:
                             val_node = node.child_by_field_name("value")
                             if val_node and val_node.type in ("arrow_function", "function_expression"):
                                 is_func_def = True
+                    elif ext == ".java":
+                        if node.type in ("method_declaration", "constructor_declaration"):
+                            is_func_def = True
+                    elif ext == ".go":
+                        if node.type in ("function_declaration", "method_declaration"):
+                            is_func_def = True
+                    elif ext == ".rs":
+                        if node.type == "function_item":
+                            is_func_def = True
+                    elif ext in (".c", ".h", ".cpp", ".hpp", ".cc", ".cxx"):
+                        if node.type == "function_definition":
+                            is_func_def = True
 
                     if is_func_def:
                         name_node = node.child_by_field_name("name")
                         if node.type == "pair":
                             name_node = node.child_by_field_name("key")
+                        elif not name_node and ext == ".java":
+                            params_node = None
+                            for c in node.children:
+                                if c.type in ("formal_parameters", "parameters"):
+                                    params_node = c
+                                    break
+                            if params_node:
+                                for c in node.children:
+                                    if c.type == "identifier" and c.end_byte <= params_node.start_byte:
+                                        name_node = c
+                            if not name_node:
+                                for c in node.children:
+                                    if c.type == "identifier":
+                                        name_node = c
+                                        break
+                        name_text = None
                         if name_node:
                             try:
                                 name_text = name_node.text.decode("utf-8")
                             except:
                                 name_text = str(name_node.text)
-                            if name_text == function_name:
-                                return node
+                        elif ext in (".c", ".h", ".cpp", ".hpp", ".cc", ".cxx"):
+                            decl = node.child_by_field_name("declarator")
+                            if decl:
+                                def find_c_id(n):
+                                    if n.type in ("identifier", "field_identifier"):
+                                        return n
+                                    elif n.type == "qualified_identifier":
+                                        nc = n.child_by_field_name("name")
+                                        return nc if nc else n
+                                    for c in n.children:
+                                        if c.type not in ("parameter_list", "argument_list", "parameters"):
+                                            res = find_c_id(c)
+                                            if res:
+                                                return res
+                                    return None
+                                c_id_node = find_c_id(decl)
+                                if c_id_node:
+                                    try:
+                                        name_text = c_id_node.text.decode("utf-8")
+                                    except:
+                                        name_text = str(c_id_node.text)
+
+                        if name_text:
+                            if "." in function_name:
+                                cls_name, actual_func_name = function_name.split(".", 1)
+                            else:
+                                cls_name, actual_func_name = None, function_name
+                                
+                            if name_text == actual_func_name:
+                                if cls_name:
+                                    is_in_correct_class = False
+                                    if ext == ".go" and node.type == "method_declaration":
+                                        recv_node = node.child_by_field_name("receiver")
+                                        if recv_node:
+                                            def find_type_id(n):
+                                                if n.type == "type_identifier":
+                                                    return n
+                                                for c in n.children:
+                                                    res = find_type_id(c)
+                                                    if res:
+                                                        return res
+                                                return None
+                                            t_node = find_type_id(recv_node)
+                                            if t_node:
+                                                try:
+                                                    c_name = t_node.text.decode("utf-8")
+                                                except:
+                                                    c_name = str(t_node.text)
+                                                if c_name == cls_name:
+                                                    is_in_correct_class = True
+                                    else:
+                                        p = node.parent
+                                        while p:
+                                            if ext == ".py" and p.type == "class_definition":
+                                                c_name_node = p.child_by_field_name("name")
+                                                if c_name_node:
+                                                    try:
+                                                        c_name = c_name_node.text.decode("utf-8")
+                                                    except:
+                                                        c_name = str(c_name_node.text)
+                                                    if c_name == cls_name:
+                                                        is_in_correct_class = True
+                                                        break
+                                            elif ext in (".js", ".jsx", ".ts", ".tsx", ".java", ".cpp", ".hpp", ".cc", ".cxx", ".c", ".h") and p.type in ("class_declaration", "interface_declaration", "class_specifier", "struct_specifier"):
+                                                c_name_node = p.child_by_field_name("name")
+                                                if not c_name_node:
+                                                    for c in p.children:
+                                                        if c.type in ("identifier", "type_identifier"):
+                                                            c_name_node = c
+                                                            break
+                                                if c_name_node:
+                                                    try:
+                                                        c_name = c_name_node.text.decode("utf-8")
+                                                    except:
+                                                        c_name = str(c_name_node.text)
+                                                    if c_name == cls_name:
+                                                        is_in_correct_class = True
+                                                        break
+                                            elif ext == ".rs" and p.type == "impl_item":
+                                                type_node = p.child_by_field_name("type")
+                                                if type_node:
+                                                    def find_type_id(n):
+                                                        if n.type == "type_identifier":
+                                                            return n
+                                                        for c in n.children:
+                                                            res = find_type_id(c)
+                                                            if res:
+                                                                return res
+                                                        return None
+                                                    t_node = find_type_id(type_node)
+                                                    if t_node:
+                                                        try:
+                                                            c_name = t_node.text.decode("utf-8")
+                                                        except:
+                                                            c_name = str(t_node.text)
+                                                        if c_name == cls_name:
+                                                            is_in_correct_class = True
+                                                            break
+                                            p = p.parent
+                                        if not is_in_correct_class and ext in (".cpp", ".hpp", ".cc", ".cxx"):
+                                            decl = node.child_by_field_name("declarator")
+                                            if decl:
+                                                def find_qual(n):
+                                                    if n.type == "qualified_identifier":
+                                                        return n
+                                                    for c in n.children:
+                                                        res = find_qual(c)
+                                                        if res:
+                                                            return res
+                                                    return None
+                                                q_node = find_qual(decl)
+                                                if q_node:
+                                                    for c in q_node.children:
+                                                        if c.type in ("namespace_identifier", "type_identifier", "identifier"):
+                                                            try:
+                                                                c_name = c.text.decode("utf-8")
+                                                            except:
+                                                                c_name = str(c.text)
+                                                            if c_name == cls_name:
+                                                                is_in_correct_class = True
+                                                                break
+                                    if is_in_correct_class:
+                                        if node.parent and node.parent.type == "decorated_definition":
+                                            return node.parent
+                                        return node
+                                else:
+                                    if node.parent and node.parent.type == "decorated_definition":
+                                        return node.parent
+                                    return node
 
                     for child in node.children:
                         res = find_func_node(child)
@@ -497,8 +753,69 @@ class ContextExtractor:
 
                 target_node = find_func_node(tree.root_node)
                 if target_node:
-                    return content[target_node.start_byte:target_node.end_byte]
-            except Exception:
+                    start_byte = target_node.start_byte
+                    if ext == ".java":
+                        curr = target_node.prev_sibling
+                        while curr and curr.type in ("marker_annotation", "annotation", "modifiers"):
+                            start_byte = curr.start_byte
+                            curr = curr.prev_sibling
+                    elif ext == ".go":
+                        curr = target_node.prev_sibling
+                        while curr and curr.type == "comment":
+                            start_byte = curr.start_byte
+                            curr = curr.prev_sibling
+                    elif ext == ".rs":
+                        curr = target_node.prev_sibling
+                        while curr and curr.type in ("attribute_item", "attribute", "comment"):
+                            start_byte = curr.start_byte
+                            curr = curr.prev_sibling
+                    line_start = start_byte
+                    while line_start > 0 and content[line_start - 1] not in ("\r", "\n"):
+                        line_start -= 1
+                    line_end = target_node.end_byte
+                    while line_end < len(content) and content[line_end] not in ("\r", "\n"):
+                        line_end += 1
+                    code_slice = content[line_start:line_end]
+
+                    def find_custom_types(n, found_types):
+                        if n.type in ("type_identifier", "user_type", "type_specifier", "struct_specifier"):
+                            try:
+                                t_name = n.text.decode("utf-8")
+                            except:
+                                t_name = str(n.text)
+                            if t_name and t_name not in ("int", "float", "double", "char", "void", "bool", "string", "String", "error", "Self", "nil", "None", "self", "u8", "u16", "u32", "u64", "f32", "f64", "size_t", "boolean"):
+                                found_types.add(t_name)
+                        for c in n.children:
+                            find_custom_types(c, found_types)
+
+                    custom_types = set()
+                    find_custom_types(target_node, custom_types)
+
+                    type_snippets = []
+                    if custom_types:
+                        for child in tree.root_node.children:
+                            if child != target_node:
+                                c_name = None
+                                name_child = child.child_by_field_name("name")
+                                if not name_child:
+                                    for gc in child.children:
+                                        if gc.type in ("type_identifier", "identifier"):
+                                            name_child = gc
+                                            break
+                                if name_child:
+                                    try:
+                                        c_name = name_child.text.decode("utf-8")
+                                    except:
+                                        c_name = str(name_child.text)
+                                if c_name and c_name in custom_types:
+                                    snip = content[child.start_byte:child.end_byte].strip()
+                                    if snip and len(snip.splitlines()) <= 15:
+                                        type_snippets.append(f"\n// [AST_TYPE_AUTO_RESOLVED: {c_name}]\n" + snip)
+
+                    if type_snippets:
+                        return code_slice + "\n" + "\n".join(type_snippets)
+                    return code_slice
+            except Exception as e:
                 pass
 
     def extract_route_statement(self, relative_path, route_path, route_method):
@@ -660,22 +977,21 @@ class ContextExtractor:
                 to_node.get("function") == function_name
             ):
 
+                caller_file = from_node.get("file")
+                caller_function = from_node.get("function")
+                call_sites = self.extract_call_sites(caller_file, caller_function, function_name)
+
                 chain.append({
 
                     "type": "FUNCTION_CALL",
 
-                    "caller_file":
-                        from_node.get(
-                            "file"
-                        ),
+                    "caller_file": caller_file,
 
-                    "caller_function":
-                        from_node.get(
-                            "function"
-                        ),
+                    "caller_function": caller_function,
 
-                    "target_function":
-                        function_name
+                    "target_function": function_name,
+
+                    "call_sites": call_sites
                 })
 
         return chain
@@ -776,17 +1092,827 @@ class ContextExtractor:
             []
         ):
 
-            if (
-
-                taint.get(
-                    "target_function"
-                )
-
-                ==
-
-                function_name
-            ):
-
                 flows.append(taint)
 
         return flows
+
+    def extract_function_signature(self, relative_path, function_name):
+        """
+        Extracts only the signature (and docstring if Python) of the specified function,
+        replacing its body with a placeholder.
+        """
+        import os
+        from language_config import LanguageManager
+        
+        full_path = os.path.normpath(os.path.join(self.project_root, relative_path))
+        if not os.path.exists(full_path):
+            return None
+
+        try:
+            with open(full_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except:
+            return None
+
+        if function_name == "GLOBAL_SCOPE":
+            return None
+
+        _, ext = os.path.splitext(relative_path)
+        lm = LanguageManager()
+        parser = lm.get_parser(ext)
+        if not parser:
+            return None
+
+        try:
+            tree = parser.parse(bytes(content, "utf-8"))
+            
+            def find_func_node(node):
+                is_func_def = False
+                if ext == ".py" and node.type == "function_definition":
+                    is_func_def = True
+                elif ext in (".js", ".jsx", ".ts", ".tsx"):
+                    if node.type in ("function_declaration", "method_definition"):
+                        is_func_def = True
+                    elif node.type == "variable_declarator":
+                        val_node = node.child_by_field_name("value")
+                        if val_node and val_node.type in ("arrow_function", "function_expression"):
+                            is_func_def = True
+                    elif node.type == "pair":
+                        val_node = node.child_by_field_name("value")
+                        if val_node and val_node.type in ("arrow_function", "function_expression"):
+                            is_func_def = True
+                elif ext == ".java":
+                    if node.type in ("method_declaration", "constructor_declaration"):
+                        is_func_def = True
+                elif ext == ".go":
+                    if node.type in ("function_declaration", "method_declaration"):
+                        is_func_def = True
+                elif ext == ".rs":
+                    if node.type == "function_item":
+                        is_func_def = True
+                elif ext in (".c", ".h", ".cpp", ".hpp", ".cc", ".cxx"):
+                    if node.type == "function_definition":
+                        is_func_def = True
+
+                if is_func_def:
+                    name_node = node.child_by_field_name("name")
+                    if node.type == "pair":
+                        name_node = node.child_by_field_name("key")
+                    elif not name_node and ext == ".java":
+                        params_node = None
+                        for c in node.children:
+                            if c.type in ("formal_parameters", "parameters"):
+                                params_node = c
+                                break
+                        if params_node:
+                            for c in node.children:
+                                if c.type == "identifier" and c.end_byte <= params_node.start_byte:
+                                    name_node = c
+                        if not name_node:
+                            for c in node.children:
+                                if c.type == "identifier":
+                                    name_node = c
+                                    break
+                    name_text = None
+                    if name_node:
+                        try:
+                            name_text = name_node.text.decode("utf-8")
+                        except:
+                            name_text = str(name_node.text)
+                    elif ext in (".c", ".h", ".cpp", ".hpp", ".cc", ".cxx"):
+                        decl = node.child_by_field_name("declarator")
+                        if decl:
+                            def find_c_id(n):
+                                if n.type in ("identifier", "field_identifier"):
+                                    return n
+                                elif n.type == "qualified_identifier":
+                                    nc = n.child_by_field_name("name")
+                                    return nc if nc else n
+                                for c in n.children:
+                                    if c.type not in ("parameter_list", "argument_list", "parameters"):
+                                        res = find_c_id(c)
+                                        if res:
+                                            return res
+                                return None
+                            c_id_node = find_c_id(decl)
+                            if c_id_node:
+                                try:
+                                    name_text = c_id_node.text.decode("utf-8")
+                                except:
+                                    name_text = str(c_id_node.text)
+
+                    if name_text:
+                        if "." in function_name:
+                            cls_name, actual_func_name = function_name.split(".", 1)
+                        else:
+                            cls_name, actual_func_name = None, function_name
+                            
+                        if name_text == actual_func_name:
+                            if cls_name:
+                                is_in_correct_class = False
+                                p = node.parent
+                                    
+                                while p:
+                                    if ext == ".py" and p.type == "class_definition":
+                                        c_name_node = p.child_by_field_name("name")
+                                        if c_name_node:
+                                            try:
+                                                c_name = c_name_node.text.decode("utf-8")
+                                            except:
+                                                c_name = str(c_name_node.text)
+                                            if c_name == cls_name:
+                                                is_in_correct_class = True
+                                                break
+                                    elif ext in (".js", ".jsx", ".ts", ".tsx", ".java") and p.type in ("class_declaration", "interface_declaration"):
+                                        c_name_node = p.child_by_field_name("name")
+                                        if not c_name_node and ext == ".java":
+                                            for c in p.children:
+                                                if c.type == "identifier":
+                                                    c_name_node = c
+                                                    break
+                                        if c_name_node:
+                                            try:
+                                                c_name = c_name_node.text.decode("utf-8")
+                                            except:
+                                                c_name = str(c_name_node.text)
+                                            if c_name == cls_name:
+                                                is_in_correct_class = True
+                                                break
+                                    p = p.parent
+                                if is_in_correct_class:
+                                    if node.parent and node.parent.type == "decorated_definition":
+                                        return node.parent
+                                    return node
+                            else:
+                                if node.parent and node.parent.type == "decorated_definition":
+                                    return node.parent
+                                return node
+
+                for child in node.children:
+                    res = find_func_node(child)
+                    if res:
+                        return res
+                return None
+
+            target_node = find_func_node(tree.root_node)
+            if not target_node:
+                return None
+
+            body_node = target_node.child_by_field_name("body")
+            if not body_node:
+                for c in target_node.children:
+                    if c.type in ("block", "statement_block", "compound_statement"):
+                        body_node = c
+                        break
+            if not body_node:
+                start_idx = target_node.start_byte
+                if ext == ".java":
+                    curr = target_node.prev_sibling
+                    while curr and curr.type in ("marker_annotation", "annotation", "modifiers"):
+                        start_idx = curr.start_byte
+                        curr = curr.prev_sibling
+                line_start_idx = start_idx
+                while line_start_idx > 0 and content[line_start_idx - 1] not in ("\r", "\n"):
+                    line_start_idx -= 1
+                return content[line_start_idx:target_node.end_byte]
+
+            actual_func_name = function_name.split(".")[-1] if "." in function_name else function_name
+            if actual_func_name in ("__init__", "constructor"):
+                start_idx = target_node.start_byte
+                line_start_idx = start_idx
+                while line_start_idx > 0 and content[line_start_idx - 1] not in ("\r", "\n"):
+                    line_start_idx -= 1
+                return content[line_start_idx:target_node.end_byte]
+
+            start_idx = target_node.start_byte
+            if ext == ".java":
+                curr = target_node.prev_sibling
+                while curr and curr.type in ("marker_annotation", "annotation", "modifiers"):
+                    start_idx = curr.start_byte
+                    curr = curr.prev_sibling
+            elif ext == ".go":
+                curr = target_node.prev_sibling
+                while curr and curr.type == "comment":
+                    start_idx = curr.start_byte
+                    curr = curr.prev_sibling
+            elif ext == ".rs":
+                curr = target_node.prev_sibling
+                while curr and curr.type in ("attribute_item", "attribute", "comment"):
+                    start_idx = curr.start_byte
+                    curr = curr.prev_sibling
+            line_start_idx = start_idx
+            while line_start_idx > 0 and content[line_start_idx - 1] not in ("\r", "\n"):
+                line_start_idx -= 1
+            indent_prefix = content[line_start_idx:start_idx]
+
+            if ext == ".py":
+                docstring_end = body_node.start_byte
+                if body_node.children:
+                    first_child = body_node.children[0]
+                    if first_child.type == "expression_statement":
+                        if first_child.children:
+                            val_node = first_child.children[0]
+                            if val_node and val_node.type == "string":
+                                docstring_end = first_child.end_byte
+                
+                sig_bytes = content[target_node.start_byte:docstring_end]
+                if isinstance(sig_bytes, bytes):
+                    sig_text = sig_bytes.decode("utf-8")
+                else:
+                    sig_text = str(sig_bytes)
+                
+                sig_text = sig_text.lstrip("\r\n").rstrip()
+                body_bytes = content[body_node.start_byte:body_node.end_byte]
+                if isinstance(body_bytes, bytes):
+                    body_text = body_bytes.decode("utf-8")
+                else:
+                    body_text = str(body_bytes)
+                
+                indent = "    "
+                for line in body_text.splitlines():
+                    if line.strip():
+                        indent = line[:len(line) - len(line.lstrip())]
+                        break
+                return f"{indent_prefix}{sig_text}\n{indent}... # [Body pruned for token reduction]"
+            else:
+                sig_bytes = content[start_idx:body_node.start_byte]
+                if isinstance(sig_bytes, bytes):
+                    sig_text = sig_bytes.decode("utf-8")
+                else:
+                    sig_text = str(sig_bytes)
+                sig_text = sig_text.lstrip("\r\n").rstrip()
+                return f"{indent_prefix}{sig_text} {{\n{indent_prefix}    ... // [Body pruned for token reduction]\n{indent_prefix}}}"
+        except Exception:
+            pass
+        return None
+
+    def extract_database_schema(self, relative_path, model_name):
+        """
+        Parses a file and extracts only the class or variable definition matching the database model_name,
+        pruning the rest of the file.
+        """
+        import os
+        from language_config import LanguageManager
+        
+        full_path = os.path.normpath(os.path.join(self.project_root, relative_path))
+        if not os.path.exists(full_path):
+            return None
+
+        try:
+            with open(full_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except:
+            return None
+
+        _, ext = os.path.splitext(relative_path)
+        lm = LanguageManager()
+        parser = lm.get_parser(ext)
+        if not parser:
+            return content
+
+        try:
+            tree = parser.parse(bytes(content, "utf-8"))
+            matched_nodes = []
+
+            def search_nodes(node):
+                matched = False
+                if ext == ".py":
+                    if node.type == "class_definition":
+                        name_node = node.child_by_field_name("name")
+                        if name_node:
+                            try:
+                                name_text = name_node.text.decode("utf-8")
+                            except:
+                                name_text = str(name_node.text)
+                            if name_text == model_name:
+                                matched = True
+                elif ext in (".js", ".jsx", ".ts", ".tsx"):
+                    if node.type == "class_declaration":
+                        name_node = node.child_by_field_name("name")
+                        if name_node:
+                            try:
+                                name_text = name_node.text.decode("utf-8")
+                            except:
+                                name_text = str(name_node.text)
+                            if name_text == model_name:
+                                matched = True
+                    elif node.type == "variable_declarator":
+                        name_node = node.child_by_field_name("name")
+                        if name_node:
+                            try:
+                                name_text = name_node.text.decode("utf-8")
+                            except:
+                                name_text = str(name_node.text)
+                            if (name_text == model_name or 
+                                name_text == f"{model_name}Schema" or 
+                                name_text.lower() == model_name.lower()):
+                                matched = True
+
+                if matched:
+                    matched_nodes.append(node)
+                    return
+
+                for child in node.children:
+                    search_nodes(child)
+
+            search_nodes(tree.root_node)
+
+            if matched_nodes:
+                snippets = []
+                for node in matched_nodes:
+                    target_node = node
+                    if node.type == "variable_declarator" and node.parent and node.parent.type in ("lexical_declaration", "variable_declaration"):
+                        target_node = node.parent
+                    snippet_bytes = content[target_node.start_byte:target_node.end_byte]
+                    if isinstance(snippet_bytes, bytes):
+                        snippets.append(snippet_bytes.decode("utf-8"))
+                    else:
+                        snippets.append(str(snippet_bytes))
+                return "\n\n".join(snippets)
+        except Exception as e:
+            print(f"[ERROR in extract_database_schema]: {e}")
+            
+        return content
+
+    def extract_call_sites(self, relative_path, caller_name, target_name):
+        """
+        Parses a file, locates the caller function/method, and extracts any statements
+        inside it that call the target_name.
+        """
+        import os
+        from language_config import LanguageManager
+        
+        full_path = os.path.normpath(os.path.join(self.project_root, relative_path))
+        if not os.path.exists(full_path):
+            return []
+
+        try:
+            with open(full_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except:
+            return []
+
+        _, ext = os.path.splitext(relative_path)
+        lm = LanguageManager()
+        parser = lm.get_parser(ext)
+        if not parser:
+            return []
+
+        try:
+            tree = parser.parse(bytes(content, "utf-8"))
+            
+            def find_func_node(node):
+                is_func_def = False
+                if ext == ".py" and node.type == "function_definition":
+                    is_func_def = True
+                elif ext in (".js", ".jsx", ".ts", ".tsx"):
+                    if node.type in ("function_declaration", "method_definition"):
+                        is_func_def = True
+                    elif node.type == "variable_declarator":
+                        val_node = node.child_by_field_name("value")
+                        if val_node and val_node.type in ("arrow_function", "function_expression"):
+                            is_func_def = True
+                    elif node.type == "pair":
+                        val_node = node.child_by_field_name("value")
+                        if val_node and val_node.type in ("arrow_function", "function_expression"):
+                            is_func_def = True
+
+                if is_func_def:
+                    name_node = node.child_by_field_name("name")
+                    if node.type == "pair":
+                        name_node = node.child_by_field_name("key")
+                    if name_node:
+                        try:
+                            name_text = name_node.text.decode("utf-8")
+                        except:
+                            name_text = str(name_node.text)
+                        
+                        actual_caller = caller_name.split(".")[-1] if "." in caller_name else caller_name
+                        if name_text == actual_caller:
+                            return node
+
+                for child in node.children:
+                    res = find_func_node(child)
+                    if res:
+                        return res
+                return None
+
+            caller_node = find_func_node(tree.root_node)
+            if not caller_node:
+                return []
+
+            call_statements = []
+            actual_target = target_name.split(".")[-1] if "." in target_name else target_name
+
+            def find_calls(node):
+                is_call = False
+                call_func_node = None
+                
+                if ext == ".py" and node.type == "call":
+                    is_call = True
+                    call_func_node = node.child_by_field_name("function")
+                elif ext in (".js", ".jsx", ".ts", ".tsx") and node.type == "call_expression":
+                    is_call = True
+                    call_func_node = node.child_by_field_name("function")
+
+                if is_call and call_func_node:
+                    try:
+                        func_text = call_func_node.text.decode("utf-8")
+                    except:
+                        func_text = str(call_func_node.text)
+                        
+                    if func_text == actual_target or func_text.endswith(f".{actual_target}"):
+                        parent_stmt = node
+                        p = node.parent
+                        while p and p != caller_node:
+                            if ext == ".py" and p.type in ("expression_statement", "assignment", "return_statement"):
+                                parent_stmt = p
+                                break
+                            elif ext in (".js", ".jsx", ".ts", ".tsx") and p.type in ("expression_statement", "lexical_declaration", "variable_declaration", "return_statement"):
+                                parent_stmt = p
+                                break
+                            p = p.parent
+                        
+                        stmt_text = content[parent_stmt.start_byte:parent_stmt.end_byte]
+                        call_statements.append(stmt_text.strip())
+
+                for child in node.children:
+                    find_calls(child)
+
+            find_calls(caller_node)
+            return list(set(call_statements))
+        except Exception:
+            pass
+        return []
+
+    def extract_class_constructor(self, relative_path, class_name):
+        """
+        Locates the class and extracts its constructor (__init__ or constructor).
+        """
+        import os
+        from language_config import LanguageManager
+        
+        full_path = os.path.normpath(os.path.join(self.project_root, relative_path))
+        if not os.path.exists(full_path):
+            return None
+
+        try:
+            with open(full_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except:
+            return None
+
+        _, ext = os.path.splitext(relative_path)
+        lm = LanguageManager()
+        parser = lm.get_parser(ext)
+        if not parser:
+            return None
+
+        try:
+            tree = parser.parse(bytes(content, "utf-8"))
+            
+            def find_class_node(node):
+                if ext == ".py" and node.type == "class_definition":
+                    name_node = node.child_by_field_name("name")
+                    if name_node:
+                        try:
+                            name_text = name_node.text.decode("utf-8")
+                        except:
+                            name_text = str(name_node.text)
+                        if name_text == class_name:
+                            return node
+                elif ext in (".js", ".jsx", ".ts", ".tsx", ".java") and node.type in ("class_declaration", "interface_declaration"):
+                    name_node = node.child_by_field_name("name")
+                    if not name_node and ext == ".java":
+                        for c in node.children:
+                            if c.type == "identifier":
+                                name_node = c
+                                break
+                    if name_node:
+                        try:
+                            name_text = name_node.text.decode("utf-8")
+                        except:
+                            name_text = str(name_node.text)
+                        if name_text == class_name:
+                            return node
+                for child in node.children:
+                    res = find_class_node(child)
+                    if res:
+                        return res
+                return None
+
+            class_node = find_class_node(tree.root_node)
+            if not class_node:
+                return None
+
+            def find_constructor(node):
+                is_constructor = False
+                if ext == ".py" and node.type == "function_definition":
+                    name_node = node.child_by_field_name("name")
+                    if name_node:
+                        try:
+                            name_text = name_node.text.decode("utf-8")
+                        except:
+                            name_text = str(name_node.text)
+                        if name_text == "__init__":
+                            is_constructor = True
+                elif ext in (".js", ".jsx", ".ts", ".tsx") and node.type == "method_definition":
+                    name_node = node.child_by_field_name("name")
+                    if name_node:
+                        try:
+                            name_text = name_node.text.decode("utf-8")
+                        except:
+                            name_text = str(name_node.text)
+                        if name_text == "constructor":
+                            is_constructor = True
+                elif ext == ".java" and node.type == "constructor_declaration":
+                    name_node = node.child_by_field_name("name")
+                    if not name_node:
+                        params_node = None
+                        for c in node.children:
+                            if c.type in ("formal_parameters", "parameters"):
+                                params_node = c
+                                break
+                        if params_node:
+                            for c in node.children:
+                                if c.type == "identifier" and c.end_byte <= params_node.start_byte:
+                                    name_node = c
+                        if not name_node:
+                            for c in node.children:
+                                if c.type == "identifier":
+                                    name_node = c
+                                    break
+                    if name_node:
+                        try:
+                            name_text = name_node.text.decode("utf-8")
+                        except:
+                            name_text = str(name_node.text)
+                        if name_text == class_name:
+                            is_constructor = True
+
+                if is_constructor:
+                    return node
+
+                for child in node.children:
+                    res = find_constructor(child)
+                    if res:
+                        return res
+                return None
+
+            constructor_node = find_constructor(class_node)
+            if constructor_node:
+                # Slice whole LINES, not from the `def` keyword. start_byte sits 4 spaces into
+                # the line for a method, so slicing from it returned "def __init__(self):" with
+                # no indent while the body kept its 8 -- a snippet no SEARCH block can match,
+                # because that line does not exist in the file. extract_function_code already
+                # walks back to the line start; this path did not, so the same symbol was
+                # emitted twice and the model quoted the broken copy.
+                start_byte = constructor_node.start_byte
+                prev = constructor_node.prev_sibling
+                while prev and prev.type in ("decorator", "comment"):
+                    start_byte = prev.start_byte
+                    prev = prev.prev_sibling
+                line_start = start_byte
+                while line_start > 0 and content[line_start - 1] not in ("\r", "\n"):
+                    line_start -= 1
+                line_end = constructor_node.end_byte
+                while line_end < len(content) and content[line_end] not in ("\r", "\n"):
+                    line_end += 1
+                code = content[line_start:line_end]
+                if isinstance(code, bytes):
+                    code = code.decode("utf-8", errors="replace")
+                # No synthetic end tag. "# [AST_CONSTRUCTOR_END: ...]" is not in the file, so a
+                # SEARCH block reaching the end of the constructor picked it up and could never
+                # apply. Callers that need the boundary have start/end lines already.
+                return code
+        except Exception:
+            pass
+        return None
+
+    def extract_import_header(self, relative_path):
+        """
+        Parses a file and extracts all top-level import statements into a single, compact import header snippet.
+        """
+        import os
+        from language_config import LanguageManager
+        
+        full_path = os.path.normpath(os.path.join(self.project_root, relative_path))
+        if not os.path.exists(full_path):
+            return None
+
+        try:
+            with open(full_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except:
+            return None
+
+        _, ext = os.path.splitext(relative_path)
+        lm = LanguageManager()
+        parser = lm.get_parser(ext)
+        if not parser:
+            return None
+
+        try:
+            tree = parser.parse(bytes(content, "utf-8"))
+            import_snippets = []
+            seen_imports = set()
+            
+            for child in tree.root_node.children:
+                is_import = False
+                if ext == ".py":
+                    if child.type in ("import_statement", "import_from_statement"):
+                        is_import = True
+                elif ext in (".js", ".jsx", ".ts", ".tsx"):
+                    if child.type == "import_statement":
+                        is_import = True
+                elif ext == ".java":
+                    if child.type == "import_declaration":
+                        is_import = True
+                elif ext == ".go":
+                    if child.type in ("package_clause", "import_declaration"):
+                        is_import = True
+                elif ext == ".rs":
+                    if child.type == "use_declaration":
+                        is_import = True
+                elif ext in (".c", ".h", ".cpp", ".hpp", ".cc", ".cxx"):
+                    if child.type in ("preproc_include", "preproc_def"):
+                        is_import = True
+
+                if is_import:
+                    snip = content[child.start_byte:child.end_byte].strip()
+                    if snip and snip not in seen_imports:
+                        seen_imports.add(snip)
+                        import_snippets.append(snip)
+
+            if import_snippets:
+                return "\n".join(import_snippets)
+        except Exception as e:
+            print(f"[ERROR in extract_import_header]: {e}")
+
+        return None
+
+    def find_parent_class_name(self, relative_path, function_name):
+        """
+        Parses a file and returns the name of the parent class containing function_name (if any).
+        """
+        if not relative_path:
+            return None
+            
+        full_path = os.path.normpath(os.path.join(self.project_root, relative_path))
+        if not os.path.exists(full_path):
+            return None
+
+        try:
+            with open(full_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except:
+            return None
+
+        _, ext = os.path.splitext(relative_path)
+        from language_config import LanguageManager
+        lm = LanguageManager()
+        parser = lm.get_parser(ext)
+        if not parser:
+            return None
+
+        try:
+            tree = parser.parse(bytes(content, "utf-8"))
+            actual_func = function_name.split(".")[-1] if "." in function_name else function_name
+            
+            def find_func_node(node):
+                is_func_def = False
+                if ext == ".py" and node.type == "function_definition":
+                    is_func_def = True
+                elif ext in (".js", ".jsx", ".ts", ".tsx"):
+                    if node.type in ("function_declaration", "method_definition"):
+                        is_func_def = True
+                elif ext == ".java" and node.type in ("method_declaration", "constructor_declaration"):
+                    is_func_def = True
+                elif ext == ".go" and node.type in ("function_declaration", "method_declaration"):
+                    is_func_def = True
+                elif ext == ".rs" and node.type == "function_item":
+                    is_func_def = True
+                elif ext in (".c", ".h", ".cpp", ".hpp", ".cc", ".cxx") and node.type == "function_definition":
+                    is_func_def = True
+
+                if is_func_def:
+                    name_node = node.child_by_field_name("name")
+                    if node.type == "pair":
+                        name_node = node.child_by_field_name("key")
+                    elif not name_node and ext == ".java":
+                        params_node = None
+                        for c in node.children:
+                            if c.type in ("formal_parameters", "parameters"):
+                                params_node = c
+                                break
+                        if params_node:
+                            for c in node.children:
+                                if c.type == "identifier" and c.end_byte <= params_node.start_byte:
+                                    name_node = c
+                        if not name_node:
+                            for c in node.children:
+                                if c.type == "identifier":
+                                    name_node = c
+                                    break
+                    name_text = None
+                    if name_node:
+                        try:
+                            name_text = name_node.text.decode("utf-8")
+                        except:
+                            name_text = str(name_node.text)
+                    elif ext in (".c", ".h", ".cpp", ".hpp", ".cc", ".cxx"):
+                        decl = node.child_by_field_name("declarator")
+                        if decl:
+                            def find_c_id(n):
+                                if n.type in ("identifier", "field_identifier"):
+                                    return n
+                                elif n.type == "qualified_identifier":
+                                    nc = n.child_by_field_name("name")
+                                    return nc if nc else n
+                                for c in n.children:
+                                    if c.type not in ("parameter_list", "argument_list", "parameters"):
+                                        res = find_c_id(c)
+                                        if res:
+                                            return res
+                                return None
+                            c_id_node = find_c_id(decl)
+                            if c_id_node:
+                                try:
+                                    name_text = c_id_node.text.decode("utf-8")
+                                except:
+                                    name_text = str(c_id_node.text)
+
+                    if name_text and name_text == actual_func:
+                        return node
+
+                for child in node.children:
+                    res = find_func_node(child)
+                    if res:
+                        return res
+                return None
+
+            func_node = find_func_node(tree.root_node)
+            if not func_node:
+                return None
+
+            if ext == ".go" and func_node.type == "method_declaration":
+                recv_node = func_node.child_by_field_name("receiver")
+                if recv_node:
+                    def find_type_id(n):
+                        if n.type == "type_identifier":
+                            return n
+                        for c in n.children:
+                            res = find_type_id(c)
+                            if res:
+                                return res
+                        return None
+                    t_node = find_type_id(recv_node)
+                    if t_node:
+                        try:
+                            return t_node.text.decode("utf-8")
+                        except:
+                            return str(t_node.text)
+
+            p = func_node.parent
+            while p:
+                if ext == ".py" and p.type == "class_definition":
+                    name_node = p.child_by_field_name("name")
+                    if name_node:
+                        try:
+                            return name_node.text.decode("utf-8")
+                        except:
+                            return str(name_node.text)
+                elif ext in (".js", ".jsx", ".ts", ".tsx", ".java", ".cpp", ".hpp", ".cc", ".cxx", ".c", ".h") and p.type in ("class_declaration", "interface_declaration", "class_specifier", "struct_specifier"):
+                    name_node = p.child_by_field_name("name")
+                    if not name_node and ext == ".java":
+                        for c in p.children:
+                            if c.type == "identifier":
+                                name_node = c
+                                break
+                    if name_node:
+                        try:
+                            return name_node.text.decode("utf-8")
+                        except:
+                            return str(name_node.text)
+                elif ext == ".rs" and p.type == "impl_item":
+                    type_node = p.child_by_field_name("type")
+                    if type_node:
+                        def find_type_id(n):
+                            if n.type == "type_identifier":
+                                return n
+                            for c in n.children:
+                                res = find_type_id(c)
+                                if res:
+                                    return res
+                            return None
+                        t_node = find_type_id(type_node)
+                        if t_node:
+                            try:
+                                return t_node.text.decode("utf-8")
+                            except:
+                                return str(t_node.text)
+                p = p.parent
+        except Exception:
+            pass
+
+        return None

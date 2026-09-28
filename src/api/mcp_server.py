@@ -58,6 +58,66 @@ SERVER_STATE = {
 
 
 # ==========================================================
+# CACHE VERSIONING
+# ==========================================================
+_ENGINE_FINGERPRINT = None
+
+
+def engine_fingerprint():
+    """sha1 of the engine sources that decide what a graph CONTAINS.
+
+    A cached graph is only valid for the builder that produced it. Without this, a fix to
+    graph_builder.py or to a .scm query left every existing .semantic_cache silently serving
+    pre-fix edges, and the only defence was remembering to pass force_rebuild.
+    """
+    global _ENGINE_FINGERPRINT
+    if _ENGINE_FINGERPRINT is not None:
+        return _ENGINE_FINGERPRINT
+    import hashlib
+    src = Path(__file__).resolve().parent.parent
+    parts = []
+    for pattern in ("semantic_core/**/*.py", "queries/*.scm", "build_graph.py",
+                    "language_config.py", "incremental_runtime/*.py"):
+        for f in sorted(src.glob(pattern)):
+            try:
+                parts.append(f.relative_to(src).as_posix().encode())
+                parts.append(f.read_bytes())
+            except OSError:
+                # unreadable input must not silently produce a STABLE fingerprint, or a
+                # half-read tree would validate every cache it touches
+                parts.append(b"<unreadable>")
+    h = hashlib.sha1()
+    for p in parts:
+        h.update(len(p).to_bytes(8, "big"))
+        h.update(p)
+    _ENGINE_FINGERPRINT = h.hexdigest()
+    return _ENGINE_FINGERPRINT
+
+
+def _stamp_path(cache_dir):
+    return os.path.join(cache_dir, "engine_version.txt")
+
+
+def cache_is_current(cache_dir):
+    """False when the cache was written by different engine code -- or by a version of the
+    engine that predates this check, which is why a MISSING stamp is also stale."""
+    try:
+        with open(_stamp_path(cache_dir), encoding="utf-8") as fh:
+            return fh.read().strip() == engine_fingerprint()
+    except OSError:
+        return False
+
+
+def stamp_cache(cache_dir):
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(_stamp_path(cache_dir), "w", encoding="utf-8") as fh:
+            fh.write(engine_fingerprint())
+    except OSError as ex:
+        print(f"Could not stamp cache version: {ex}", file=sys.stderr)
+
+
+# ==========================================================
 # MCP TOOLS
 # ==========================================================
 @mcp.tool()
@@ -105,6 +165,14 @@ def mcp_build_graph(repo_path: str, force_rebuild: bool = False, watch: bool = F
         rebuild_incrementally = False
         changed_files = []
 
+        # A cache written by different engine code describes a graph this build would not
+        # produce. Treat it as absent rather than trusting it; a missing stamp means it predates
+        # this check and is equally untrustworthy.
+        if not force_rebuild and not cache_is_current(cache_dir):
+            print(f"Cache was built by different engine code; rebuilding {repo_path} in full.",
+                  file=sys.stderr)
+            force_rebuild = True
+
         if not force_rebuild:
             try:
                 # the graph already in memory for THIS repo is the snapshot's content (or
@@ -144,6 +212,7 @@ def mcp_build_graph(repo_path: str, force_rebuild: bool = False, watch: bool = F
                             # the 27 MB astropy snapshot takes ~0.4 s to serialize + write:
                             # do it while the model thinks, not inside this call
                             snapshot_mgr.save_snapshot(graph, "graph", background=True, on_done=change_detector.committer())
+                            stamp_cache(cache_dir)
                         else:
                             print(f"Snapshot has no builder state; rebuilding {repo_path} in full.", file=sys.stderr)
                     else:
@@ -171,6 +240,7 @@ def mcp_build_graph(repo_path: str, force_rebuild: bool = False, watch: bool = F
                     change_detector.get_changed_files(repo_path, cache_dir=cache_dir, commit=False)
                     SERVER_STATE["hashes"] = change_detector.last_hashes
                     snapshot_mgr.save_snapshot(graph, "graph", background=True, on_done=change_detector.committer())
+                    stamp_cache(cache_dir)
             except Exception as e:
                 return f"Error building graph: {e}"
 

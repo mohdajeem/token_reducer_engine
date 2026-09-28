@@ -242,9 +242,24 @@ def resolve_target_node(graph, target_spec, repo_root=None):
             actual_func = func_name.split(".")[-1] if "." in func_name else func_name
 
             cls = func_name.split(".")[0] if "." in func_name else None
+            _matched_files = []
             for registered_file in graph.get("functions", {}):
                 norm_reg = registered_file.replace("\\", "/")
                 if norm_reg.endswith(file_path) or file_path.endswith(norm_reg):
+                    _matched_files.append(registered_file)
+                    # Matching the FILE is not enough. This returned here without ever asking
+                    # whether the file defines the name, so `FUNCTION:pkg/mod.py:DoesNotExist`
+                    # produced a node for a function that does not exist, extract_context fell
+                    # back to the whole file, and the caller got {"target_count": 1,
+                    # "editable_count": 1} with no error -- a drifted symbol name silently
+                    # became a whole-file answer that looks like a result.
+                    # entries are dicts in a real graph and bare strings in some callers'
+                    # hand-built ones; the bare-name branch above already tolerates both, and
+                    # reading only the dicts made this check reject a whole valid shape
+                    _defined = {(fn.get("name") if isinstance(fn, dict) else fn)
+                                for fn in graph.get("functions", {}).get(registered_file, [])}
+                    if actual_func not in _defined:
+                        continue
                     node = {
                         "type": "FUNCTION",
                         "file": registered_file,
@@ -264,6 +279,31 @@ def resolve_target_node(graph, target_spec, repo_root=None):
                         if len(owners) > 1:
                             node["ambiguous_classes"] = owners
                     return node
+
+            if _matched_files:
+                # The file exists but does not define this symbol. It may live in, or be
+                # inherited from, another file -- point at the file that defines it rather
+                # than inventing a node for the one that was asked about.
+                _si = graph.get("symbol_index", {})
+                _elsewhere = [f for f in dict.fromkeys(
+                    _si.get(func_name) or _si.get(actual_func) or [])
+                    if f not in _matched_files]
+                if _elsewhere:
+                    _node = {
+                        "type": "FUNCTION",
+                        "file": _elsewhere[0],
+                        "function": actual_func,
+                        # the caller asked about a different file; say so rather than letting
+                        # the answer look like it came from the file they named
+                        "resolved_in_other_file": file_path,
+                    }
+                    if cls:
+                        _node["class"] = cls
+                    return _node
+                raise TargetSpecError(
+                    f"{target_spec!r}: {actual_func!r} is not defined in {_matched_files[0]!r}, "
+                    f"and no other file defines it either. Returning the whole file under this "
+                    f"name would look like a result.")
 
             return {
                 "type": "FUNCTION",

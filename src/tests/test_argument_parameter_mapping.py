@@ -47,6 +47,11 @@ def run_test():
         print(f"Type: {sm.match_type}, captures: {sm.captures}, owner: {sm.owner_function}")
         
     builder = GraphBuilder()
+    # A real build gets this from detect_frameworks(directory); building from a match list
+    # by hand skips that, and detect_taint_sources treats req.body as user input only for a
+    # known web framework. The fixture below is Express -- getAllUsers(req, res) reading
+    # req.body -- so this is what a real build would have detected.
+    builder.frameworks = {"express"}
     
     # 3. Build graph
     graph = builder.build(semantic_matches)

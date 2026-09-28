@@ -14,16 +14,12 @@ class MasterTestRunner:
     
     def __init__(self):
         self.test_dir = Path(__file__).parent
-        self.results = {
-            "test_graph_correctness.py": None,
-            "test_execution_edges.py": None,
-            "test_symbol_resolution.py": None,
-            "test_security_analysis.py": None,
-            "test_end_to_end_pipeline.py": None,
-            "test_traversal_policy.py": None,
-            "test_mcp_server.py": None,
-            "test_benchmark_harness.py": None,
-        }
+        # Discovered, not hand-listed. The previous literal held 13 names while tests/
+        # contained 35 files; the 22 that were missing had simply been added after someone
+        # last edited this list, and nothing pointed that out.
+        self.results = {p.name: None for p in sorted(self.test_dir.glob("test_*.py"))}
+
+
     
     def run_test(self, test_name):
         """Run a single test file."""
@@ -38,17 +34,32 @@ class MasterTestRunner:
         print(f"{'=' * 80}\n")
         
         try:
+            # Through pytest, so pytest-style files actually execute. Run as a plain script,
+            # a file whose tests are module-level `def test_x()` functions with no __main__
+            # block defines them, exits 0, and is recorded as a pass having asserted nothing.
             result = subprocess.run(
-                [sys.executable, str(test_path)],
-                cwd=str(self.test_dir),
+                [sys.executable, "-m", "pytest", str(test_path), "-q", "-p", "no:warnings"],
+                # from src/, because the test modules import the engine by top-level name
+                # (`from build_graph import ...`); from tests/ that is a ModuleNotFoundError
+                # at collection time, which scores as a failing test rather than a bad command
+                cwd=str(self.test_dir.parent),
                 capture_output=False,
-                timeout=60
+                timeout=120
             )
+            if result.returncode == 5:
+                # exit 5 = pytest collected nothing: a script-style test, run it directly
+                print(f"[INFO] {test_name}: no pytest tests collected, running as a script")
+                result = subprocess.run(
+                    [sys.executable, str(test_path)],
+                    cwd=str(self.test_dir),
+                    capture_output=False,
+                    timeout=120
+                )
             success = result.returncode == 0
             self.results[test_name] = success
             return success
         except subprocess.TimeoutExpired:
-            print(f"[TIMEOUT] Test exceeded 60 seconds")
+            print(f"[TIMEOUT] Test exceeded 120 seconds")
             self.results[test_name] = False
             return False
         except Exception as e:

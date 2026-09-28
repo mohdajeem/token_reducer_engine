@@ -46,7 +46,9 @@ class GraphBuilder:
 
             "functions": {},
 
-            "errors": {},
+            # raise/throw SITES, not build failures. Named "errors" this section made a
+            # healthy build look broken: 62 entries on a clean requests build.
+            "throws": {},
 
             "contracts": {},
 
@@ -2087,8 +2089,20 @@ class GraphBuilder:
                        _seen=None):
         """(file, metadata) for class_name.method, walking the superclass chain. _want_static:
         the receiver is the class itself (`Lexer.lex(src)`), so a static method is preferred."""
-        if not class_name or _depth > 8:
+        # 32, not 8: a chain of 8 subclasses resolved and 9 returned
+        # nothing. `_seen` below is what actually stops a diamond
+        # being re-walked, so the old cap only lost deep hierarchies.
+        if not class_name or _depth > 32:
             return None, None
+        # Translate a local alias BEFORE the file lookup. `from base import Mixin as
+        # Renamed` makes the base of `class Child(Renamed)` read as "Renamed", and no file
+        # in the repo defines a class by that name -- so resolve_class_file misses first and
+        # translating afterwards only searches the wrong file. Skipped when this file has a
+        # class of that name itself, so a local class still shadows an import.
+        if class_name not in self.graph["classes"].get(file_path, {}):
+            _real = self.symbol_table.resolve_imported_name(file_path, class_name)
+            if _real and _real != class_name:
+                class_name = _real
         cls_file = self.resolve_class_file(file_path, class_name) or file_path
         meta = self.function_index.resolve_static(cls_file, class_name, method, want_static=bool(_want_static)) \
             or self.function_index.resolve_function(cls_file, f"{class_name}.{method}")
@@ -3063,11 +3077,11 @@ class GraphBuilder:
     def handle_error(self, sm):
 
         self.ensure_file(
-            "errors",
+            "throws",
             sm.file_path
         )
 
-        self.graph["errors"][
+        self.graph["throws"][
             sm.file_path
         ].append({
 

@@ -34,7 +34,7 @@ class GraphInvalidator:
 
             "database",
 
-            "errors",
+            "throws",
 
             "contracts",
 

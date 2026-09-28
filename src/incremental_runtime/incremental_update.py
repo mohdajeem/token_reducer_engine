@@ -23,7 +23,7 @@ slow one.
 """
 import os
 
-_FILE_SECTIONS = ("functions", "imports", "routes", "calls", "database", "errors", "contracts",
+_FILE_SECTIONS = ("functions", "imports", "routes", "calls", "database", "throws", "contracts",
                   "parameters", "arguments", "classes", "reexports", "literals")
 _DERIVED_LISTS = ("data_flow", "taint_sources", "security_sinks", "security_findings", "sanitizers")
 

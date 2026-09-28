@@ -222,10 +222,19 @@ def find_owner_class(func_node):
             sup = None
             bases = cls.child_by_field_name("superclasses")
             if bases is not None:
+                # Collect every base and keep the first as `sup` for this function's two-value
+                # contract. Breaking on the first one here was the same bug as in python.scm:
+                # `class CountVectorizer(BaseEstimator, VectorizerMixin)` recorded only
+                # BaseEstimator, so the mixin that defines the method was invisible. The
+                # authoritative list now comes from handle_contract; this stays consistent with
+                # it rather than contradicting it.
+                found = []
                 for ch in bases.named_children:
                     if ch.type in ("identifier", "attribute"):
-                        sup = _text(ch).split(".")[-1]
-                        break
+                        nm = _text(ch).split(".")[-1]
+                        if nm and nm != "object" and nm not in found:
+                            found.append(nm)
+                sup = found[0] if found else None
             return (_text(name) if name is not None else None), sup
         if par.type == "decorated_definition":
             node = par

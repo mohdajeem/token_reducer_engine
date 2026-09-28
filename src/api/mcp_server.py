@@ -320,6 +320,65 @@ def mcp_build_graph(repo_path: str, force_rebuild: bool = False, watch: bool = F
 _REPO_SIZE_CACHE = {}
 
 
+def _append_metric(path, record):
+    """Splice one record in before the array's closing bracket. True when it worked.
+
+    log_query_telemetry used to load the whole metrics array, append, and dump it back, so
+    recording a query cost more the more queries had ever been recorded: 0.03s at 757 KB,
+    0.14s at 3 MB, and the file only grows. Over a few hundred tasks that is minutes spent
+    re-serialising history.
+
+    Three analysers read this file with json.load, so the format has to stay a JSON array
+    indented by two -- and it does. A JSON array ends with "]", so the record is spliced in
+    just before it and the bytes written are what json.dump(metrics, f, indent=2) would have
+    produced, in constant time.
+
+    Two processes appending at once can still interleave. The old read-modify-write had the
+    same race and a worse consequence: it could drop whole records rather than produce one
+    malformed line. Nothing in the benchmark writes telemetry concurrently.
+    """
+    try:
+        if not os.path.exists(path) or os.path.getsize(path) < 2:
+            return False
+        block = "\n".join("  " + ln for ln in json.dumps(record, indent=2).split("\n"))
+        with open(path, "r+b") as fh:
+            fh.seek(0, os.SEEK_END)
+            pos = fh.tell()
+            ch = b""
+            # walk back to the last non-whitespace byte; it has to be the closing bracket
+            while pos > 0:
+                pos -= 1
+                fh.seek(pos)
+                ch = fh.read(1)
+                if ch not in (b" ", b"\t", b"\r", b"\n"):
+                    break
+            if ch != b"]":
+                return False
+            # and the one before it says whether the array already has entries
+            before, prev = pos, b""
+            while before > 0:
+                before -= 1
+                fh.seek(before)
+                prev = fh.read(1)
+                if prev not in (b" ", b"\t", b"\r", b"\n"):
+                    break
+            if prev == b"[":
+                tail = "\n" + block + "\n]"
+            elif prev == b"}":
+                tail = ",\n" + block + "\n]"
+            else:
+                return False  # not a list of objects; leave it alone
+            # truncate right after that byte, not at the bracket: cutting at the bracket
+            # leaves the newline that followed the last record and writes "}\n,\n" where
+            # json.dump would have written "},\n" -- valid JSON, but no longer byte-identical
+            fh.seek(before + 1)
+            fh.truncate()
+            fh.write(tail.encode("utf-8"))
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def log_query_telemetry(repo_path: str, target: str, policy: str, context: dict):
     """
     Shadow logs context query metrics to snapshots/vibecoding_metrics.json.
@@ -398,6 +457,10 @@ def log_query_telemetry(repo_path: str, target: str, policy: str, context: dict)
         os.makedirs(snapshots_dir, exist_ok=True)
         metrics_file = os.path.join(snapshots_dir, "vibecoding_metrics.json")
         
+        if _append_metric(metrics_file, record):
+            return
+
+        # missing, empty, damaged, or not an array: rebuild it the slow way, which repairs it
         metrics = []
         if os.path.exists(metrics_file):
             try:

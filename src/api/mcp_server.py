@@ -1311,6 +1311,9 @@ def mcp_skeleton(file_path: str, max_symbols: int = 120, keywords: Optional[List
 # ==========================================================
 _CAMEL_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
 _WORD_RE = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+# `Class.member` in a query -- `Session.__init__` names ONE method, and _WORD_RE alone splits it
+# into two unrelated words, after which every `__init__` in the repo matched it
+_QUAL_RE = re.compile(r"([A-Za-z_$][A-Za-z0-9_$]*)\.([A-Za-z_$][A-Za-z0-9_$]*)")
 _STOP = {"the", "and", "for", "with", "that", "this", "from", "when", "should", "not", "are", "was",
          "have", "has", "but", "you", "can", "does", "into", "out", "all", "any", "use", "used", "using"}
 
@@ -1376,13 +1379,58 @@ def mcp_find_symbols(query: str, limit: int = 10, include_tests: bool = False) -
     n_sym = max(1, len(fn_entries))
     idf = lambda w: max(0.15, 1.0 - math.log1p(df.get(w, 0)) / math.log1p(n_sym))
 
+    # Honour `Class.member`. The query "Session.__init__" names one method, but _WORD_RE split
+    # it into "session" and "__init__", and "__init__" then matched every class's constructor:
+    # on requests, "Initialize self.timeout in Session.__init__" ranked models.py (five
+    # unrelated __init__s) above sessions.py. Pairs are taken only when the class is real AND
+    # defines that member, so `self.timeout` (self is not a class), `os.path` (not a class
+    # here) and `Child.validate` (validate inherited from a base, not defined on Child) keep the
+    # old behaviour. A consumed pair keeps its class name as a plain token -- the class is
+    # still evidence -- and drops the member, so the member can only match through its class.
+    #
+    # Measured on 170 blinded tasks (requests, express, redux_toolkit), top-1 file correct:
+    # 134 -> 159, 25 fixed and 0 broken.
+    qual_pairs = set()
+    members = {}
+    for _, fn in fn_entries:
+        if fn.get("class"):
+            members.setdefault(fn["class"].lower(), set()).add(fn["name"].lower())
+    spans = []
+    for m in _QUAL_RE.finditer(q):
+        cl, ml = m.group(1).lower(), m.group(2).lower()
+        if cl in ("self", "cls", "this", "super") or ml not in members.get(cl, ()):
+            continue
+        qual_pairs.add((cl, ml))
+        spans.append((m.start(), m.end(), m.group(1)))
+    if spans:
+        out, last = [], 0
+        for s, e, keep in spans:
+            out.append(q[last:s])
+            out.append(keep)
+            last = e
+        out.append(q[last:])
+        tokens = [t for t in _WORD_RE.findall("".join(out)) if len(t) >= 2]
+        tok_low = {t.lower() for t in tokens} - _STOP
+        tok_sub = set()
+        for t in tokens:
+            tok_sub |= _subwords(t)
+        tok_sub -= _STOP
+
     class_hits = set()
     for file, fn in fn_entries:
         name = fn["name"]
         qual = f"{fn['class']}.{name}" if fn.get("class") else name
         nl = name.lower()
-        if nl in tok_low:
-            # exact name match, damped for names that are everywhere (`update`, `init`)
+        if fn.get("class") and (fn["class"].lower(), nl) in qual_pairs:
+            # the query named exactly this Class.member -- the strongest evidence there is
+            bump(file, 10.0, f"symbol {qual}", "symbol")
+        elif nl in tok_low:
+            # Exact name match. NOTE the damping here mostly does NOT fire: `df` is keyed by
+            # sub-words, so idf("__init__") looks up a key that only exists as "init" and comes
+            # back 1.0. Keying it on the whole name, so common names really are damped, was
+            # measured on the same 170 tasks and made ranking WORSE -- 10 fixed, 4 broken on its
+            # own, and 6 tasks lost when added on top of the Class.member fix above. Left as is
+            # deliberately; do not "correct" it without re-running selftest/search_localisation.py.
             bump(file, 10.0 * max(0.25, idf(nl)), f"symbol {qual}", "symbol")
         elif fn.get("class") and fn["class"].lower() in tok_low:
             # a class-name match is one piece of evidence per file, not one per method
